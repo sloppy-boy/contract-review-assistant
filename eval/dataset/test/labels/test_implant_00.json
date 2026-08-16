@@ -1,0 +1,15 @@
+{
+  "contractId": "test_implant_00",
+  "group": "implant",
+  "family": "B",
+  "seed": 200,
+  "defects": [
+    {
+      "clauseId": "6",
+      "riskType": "定金条款违规",
+      "severity": "medium",
+      "defectId": "d_deposit_25",
+      "variant": false
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "contractId": "dev_implant_07",
+  "group": "implant",
+  "family": "A",
+  "seed": 100,
+  "defects": [
+    {
+      "clauseId": "第九条",
+      "riskType": "不可抗力范围过宽",
+      "severity": "high",
+      "defectId": "d_fm_market",
+      "variant": true
+    }
+  ]
+}

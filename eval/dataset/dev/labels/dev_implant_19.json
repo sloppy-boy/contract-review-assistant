@@ -1,0 +1,22 @@
+{
+  "contractId": "dev_implant_19",
+  "group": "implant",
+  "family": "A",
+  "seed": 100,
+  "defects": [
+    {
+      "clauseId": "第六条",
+      "riskType": "定金条款违规",
+      "severity": "medium",
+      "defectId": "d_deposit_25",
+      "variant": false
+    },
+    {
+      "clauseId": "第七条",
+      "riskType": "知识产权归属不清",
+      "severity": "high",
+      "defectId": "d_ip_missing",
+      "variant": true
+    }
+  ]
+}

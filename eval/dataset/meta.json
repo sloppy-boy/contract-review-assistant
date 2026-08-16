@@ -1,0 +1,53 @@
+{
+  "plan": {
+    "dev": {
+      "family": "A",
+      "implant": 21,
+      "clean": 14,
+      "boundary": 8,
+      "seed": 100
+    },
+    "test": {
+      "family": "B",
+      "implant": 9,
+      "clean": 6,
+      "boundary": 4,
+      "seed": 200
+    }
+  },
+  "defectPool": [
+    "d_penalty_40",
+    "d_deposit_25",
+    "d_pay_120",
+    "d_arb_no_org",
+    "d_penalty_5",
+    "d_pay_waive",
+    "d_conf_missing",
+    "d_fm_market",
+    "d_term_unilateral",
+    "d_accept_vague",
+    "d_ip_missing",
+    "d_prepay_90",
+    "d_nc_unbounded",
+    "d_data_nopermit",
+    "d_sub_no_consent",
+    "d_notice_missing",
+    "d_tax_all",
+    "d_jur_no_link"
+  ],
+  "variantShare": 0.7777777777777778,
+  "manualAudit": [
+    "dev_clean_28",
+    "dev_clean_31",
+    "dev_clean_34",
+    "dev_implant_10",
+    "dev_implant_11",
+    "dev_implant_15",
+    "dev_implant_16",
+    "dev_implant_17",
+    "test_boundary_16",
+    "test_implant_04",
+    "test_implant_06"
+  ],
+  "manualAuditRatio": 0.177
+}

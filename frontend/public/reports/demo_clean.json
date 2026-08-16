@@ -1,0 +1,102 @@
+{
+  "contract": {
+    "name": "demo_clean",
+    "type": "purchase",
+    "clauseCount": 12
+  },
+  "summary": {
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "total": 0,
+    "byCategory": {}
+  },
+  "risks": [],
+  "clauses": [
+    {
+      "clauseId": "第一条",
+      "quote": "第一条 合同标的：甲方向乙方采购伺服驱动器，数量 1000 台，单价 2000 元，合同总价 2000000 元。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第二条",
+      "quote": "第二条 质量标准：乙方交付的货物应符合国家标准及双方确认的技术规格书。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第三条",
+      "quote": "第三条 交付与验收：乙方应于 2026年3月1日 前将货物交付至甲方指定地点。甲方应在收到货物后 15 个工作日内完成验收，验收标准按本合同第二条约定的质量标准执行。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第四条",
+      "quote": "第四条 付款方式：合同签订后 7 日内，甲方向乙方支付合同总价 30% 的预付款；货物验收合格后 30 日内，甲方支付剩余款项。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第五条",
+      "quote": "第五条 违约责任：任何一方违约的，应向守约方支付合同总价 10% 的违约金。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第六条",
+      "quote": "第六条 定金：双方约定定金为合同总价的 10%，甲方应于合同签订后 3 日内支付。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第七条",
+      "quote": "第七条 知识产权：乙方交付的货物所含知识产权归各自权利人所有；乙方保证其交付物不侵犯任何第三方知识产权。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第八条",
+      "quote": "第八条 保密：双方对合同内容及合作过程中知悉的对方商业秘密负有保密义务，保密期限为合同终止后两年；违反保密义务的，应赔偿对方因此遭受的损失。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第九条",
+      "quote": "第九条 不可抗力：因不可抗力不能履行合同的，根据不可抗力的影响部分或者全部免除责任，但应及时通知对方并提供证明。不可抗力指不能预见、不能避免且不能克服的客观情况。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第十条",
+      "quote": "第十条 争议解决：因本合同引起的争议，双方协商解决；协商不成的，向甲方所在地人民法院起诉。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第十一条",
+      "quote": "第十一条 通知送达：双方确认本合同首部所列地址为有效送达地址，地址变更应提前三个工作日书面通知对方。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第十二条",
+      "quote": "第十二条 其他：本合同自双方盖章之日起生效，一式两份，甲乙双方各执一份。",
+      "riskLevel": null
+    }
+  ],
+  "meta": {
+    "reviewMode": "C",
+    "mock": false,
+    "generatedAt": "2026-08-16 12:57:45",
+    "latencyMs": 13136,
+    "reviewLog": [
+      {
+        "findingId": "w_breach_liability-第六条-0",
+        "verdict": "rejected",
+        "clauseId": "第六条",
+        "riskType": "定金条款违规",
+        "severity": "low",
+        "reason": "定金比例为10%，未超过法定20%上限，且合同同时约定违约金，但定金与违约金并用风险属于潜在争议，并非必然违法。根据严格标准，该条款已符合合理商业约定，风险发现属于'可以写得更完善'式，应驳回。",
+        "wasRejectedByReviewer": true,
+        "revertedAfterReverify": true,
+        "upheldAfterReverify": false,
+        "verifyNote": "法条核对：CIVIL-586条文号及内容准确，但定金比例10%未超限，不构成违规。"
+      }
+    ],
+    "tokens": {
+      "input": 13796,
+      "output": 2070
+    },
+    "costYuan": 0.0442
+  }
+}

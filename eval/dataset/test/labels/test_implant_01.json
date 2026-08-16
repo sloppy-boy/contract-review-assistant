@@ -1,0 +1,29 @@
+{
+  "contractId": "test_implant_01",
+  "group": "implant",
+  "family": "B",
+  "seed": 200,
+  "defects": [
+    {
+      "clauseId": "4",
+      "riskType": "付款期限过长",
+      "severity": "medium",
+      "defectId": "d_pay_120",
+      "variant": false
+    },
+    {
+      "clauseId": "5",
+      "riskType": "税费承担约定不明",
+      "severity": "low",
+      "defectId": "d_tax_all",
+      "variant": true
+    },
+    {
+      "clauseId": "11",
+      "riskType": "送达地址条款缺失",
+      "severity": "low",
+      "defectId": "d_notice_missing",
+      "variant": true
+    }
+  ]
+}

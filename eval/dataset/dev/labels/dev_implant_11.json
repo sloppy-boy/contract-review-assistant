@@ -1,0 +1,15 @@
+{
+  "contractId": "dev_implant_11",
+  "group": "implant",
+  "family": "A",
+  "seed": 100,
+  "defects": [
+    {
+      "clauseId": "第四条",
+      "riskType": "预付款比例过高",
+      "severity": "high",
+      "defectId": "d_prepay_90",
+      "variant": true
+    }
+  ]
+}

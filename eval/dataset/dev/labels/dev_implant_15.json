@@ -1,0 +1,15 @@
+{
+  "contractId": "dev_implant_15",
+  "group": "implant",
+  "family": "A",
+  "seed": 100,
+  "defects": [
+    {
+      "clauseId": "第十一条",
+      "riskType": "送达地址条款缺失",
+      "severity": "low",
+      "defectId": "d_notice_missing",
+      "variant": true
+    }
+  ]
+}

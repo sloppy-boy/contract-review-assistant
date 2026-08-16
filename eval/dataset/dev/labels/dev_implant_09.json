@@ -1,0 +1,15 @@
+{
+  "contractId": "dev_implant_09",
+  "group": "implant",
+  "family": "A",
+  "seed": 100,
+  "defects": [
+    {
+      "clauseId": "第三条",
+      "riskType": "验收期限过短",
+      "severity": "medium",
+      "defectId": "d_accept_vague",
+      "variant": true
+    }
+  ]
+}

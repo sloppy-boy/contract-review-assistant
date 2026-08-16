@@ -1,0 +1,12 @@
+{
+  "contractId": "test_boundary_15",
+  "group": "boundary",
+  "family": "B",
+  "seed": 200,
+  "defects": [],
+  "boundary": {
+    "desc": "违约金比例 25%（高于 20% 但低于 30%，算高算低有争议）",
+    "expert_tendency": "medium",
+    "disputed": true
+  }
+}

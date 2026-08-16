@@ -1,0 +1,22 @@
+{
+  "contractId": "test_implant_02",
+  "group": "implant",
+  "family": "B",
+  "seed": 200,
+  "defects": [
+    {
+      "clauseId": "7",
+      "riskType": "知识产权归属不清",
+      "severity": "high",
+      "defectId": "d_ip_missing",
+      "variant": true
+    },
+    {
+      "clauseId": "4",
+      "riskType": "预付款比例过高",
+      "severity": "high",
+      "defectId": "d_prepay_90",
+      "variant": true
+    }
+  ]
+}

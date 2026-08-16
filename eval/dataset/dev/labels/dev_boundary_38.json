@@ -1,0 +1,12 @@
+{
+  "contractId": "dev_boundary_38",
+  "group": "boundary",
+  "family": "A",
+  "seed": 100,
+  "defects": [],
+  "boundary": {
+    "desc": "付款期 90 天（临界值，是否有风险有争议）",
+    "expert_tendency": "low",
+    "disputed": true
+  }
+}

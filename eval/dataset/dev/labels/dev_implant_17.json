@@ -1,0 +1,15 @@
+{
+  "contractId": "dev_implant_17",
+  "group": "implant",
+  "family": "A",
+  "seed": 100,
+  "defects": [
+    {
+      "clauseId": "第十条",
+      "riskType": "管辖约定不明确或无效",
+      "severity": "high",
+      "defectId": "d_jur_no_link",
+      "variant": true
+    }
+  ]
+}

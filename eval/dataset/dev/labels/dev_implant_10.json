@@ -1,0 +1,15 @@
+{
+  "contractId": "dev_implant_10",
+  "group": "implant",
+  "family": "A",
+  "seed": 100,
+  "defects": [
+    {
+      "clauseId": "第七条",
+      "riskType": "知识产权归属不清",
+      "severity": "high",
+      "defectId": "d_ip_missing",
+      "variant": true
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "contractId": "dev_implant_00",
+  "group": "implant",
+  "family": "A",
+  "seed": 100,
+  "defects": [
+    {
+      "clauseId": "第五条",
+      "riskType": "违约金过高",
+      "severity": "high",
+      "defectId": "d_penalty_40",
+      "variant": false
+    }
+  ]
+}

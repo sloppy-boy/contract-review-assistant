@@ -1,0 +1,339 @@
+{
+  "contract": {
+    "name": "demo_high",
+    "type": "purchase",
+    "clauseCount": 12
+  },
+  "summary": {
+    "high": 4,
+    "medium": 3,
+    "low": 0,
+    "total": 7,
+    "byCategory": {
+      "payment_invoice": 2,
+      "acceptance_delivery": 1,
+      "breach_liability": 2,
+      "termination": 2
+    }
+  },
+  "risks": [
+    {
+      "id": "w_payment_invoice-第五条-1",
+      "worker": "payment_invoice",
+      "clauseId": "第五条",
+      "clauseQuote": "甲方有权在任何时候单方解除本合同，无需承担任何责任。",
+      "riskType": "逾期付款违约金缺失",
+      "severity": "high",
+      "legalBasis": {
+        "tier": "indirect",
+        "articleId": "CIVIL-496",
+        "version": "中华人民共和国民法典（2021-01-01 施行）",
+        "quote": "采用格式条款订立合同的，提供格式条款的一方应当遵循公平原则确定当事人之间的权利和义务"
+      },
+      "evidence": "甲方单方解除合同无需承担任何责任，且合同未约定逾期付款违约金，该条款使乙方权益无保障。",
+      "suggestion": "删除甲方单方解除合同无需承担责任的表述，并增加逾期付款违约金条款，如按日万分之五计算。",
+      "suggestionClauseText": "甲方逾期付款的，每逾期一日，应按未付款项的万分之五向乙方支付违约金。甲方单方解除合同的，应赔偿乙方因此遭受的损失。",
+      "status": "upheld",
+      "rejectReason": "",
+      "reVerifyJustification": "",
+      "disputed": false
+    },
+    {
+      "id": "w_breach_liability-第五条-1",
+      "worker": "breach_liability",
+      "clauseId": "第五条",
+      "clauseQuote": "甲方有权在任何时候单方解除本合同，无需承担任何责任。",
+      "riskType": "违约救济不完整",
+      "severity": "high",
+      "legalBasis": {
+        "tier": "indirect",
+        "articleId": "",
+        "version": "",
+        "quote": "间接依据：公平原则（民法典第六条）及诚信原则（民法典第七条），非直接条文。"
+      },
+      "evidence": "条款赋予甲方任意解除权且无需承担责任，剥夺了乙方的基本救济权利，显失公平。",
+      "suggestion": "删除该表述，或限定甲方单方解除权的行使条件（如仅在乙方根本违约时），并明确甲方违约时仍需承担违约责任。",
+      "suggestionClauseText": "甲方在乙方根本违约时有权解除合同，但应承担相应的违约责任；甲方无正当理由单方解除合同的，应赔偿乙方因此遭受的全部损失。",
+      "status": "upheld",
+      "rejectReason": "",
+      "reVerifyJustification": "",
+      "disputed": false
+    },
+    {
+      "id": "w_termination-第五条-0",
+      "worker": "termination",
+      "clauseId": "第五条",
+      "clauseQuote": "甲方有权在任何时候单方解除本合同，无需承担任何责任。",
+      "riskType": "单方解除条件失衡",
+      "severity": "high",
+      "legalBasis": {
+        "tier": "indirect",
+        "articleId": "",
+        "version": "",
+        "quote": "间接依据：公平原则及民法典第566条关于解除后果的规定，但无直接条文禁止单方任意解除。"
+      },
+      "evidence": "条款赋予甲方任意解除权，且无需承担责任，乙方无对等权利，触发条件不客观，明显失衡。",
+      "suggestion": "删除'无需承担任何责任'，并将解除权限定于法定或约定事由（如乙方根本违约），或约定甲方任意解除时需赔偿乙方损失。",
+      "suggestionClauseText": "甲方有权在乙方根本违约时解除本合同，并要求乙方承担违约责任；若甲方非因乙方违约而解除合同，应赔偿乙方因此遭受的直接损失。",
+      "status": "upheld",
+      "rejectReason": "",
+      "reVerifyJustification": "",
+      "disputed": false
+    },
+    {
+      "id": "w_payment_invoice-第四条-0",
+      "worker": "payment_invoice",
+      "clauseId": "第四条",
+      "clauseQuote": "合同签订后 7 日内，甲方向乙方支付合同总价 90% 的预付款；货物验收合格后 30 日内，甲方支付剩余款项。",
+      "riskType": "预付款比例过高",
+      "severity": "high",
+      "legalBasis": {
+        "tier": "indirect",
+        "articleId": "CIVIL-496",
+        "version": "中华人民共和国民法典（2021-01-01 施行）",
+        "quote": "采用格式条款订立合同的，提供格式条款的一方应当遵循公平原则确定当事人之间的权利和义务"
+      },
+      "evidence": "预付款比例高达90%，且无任何担保或退款机制，远超80%阈值。",
+      "suggestion": "降低预付款比例至合理水平（如30%），并增加担保或退款机制，如要求甲方提供银行保函或约定乙方未履行合同时的退款义务。",
+      "suggestionClauseText": "合同签订后7日内，甲方向乙方支付合同总价30%的预付款；货物验收合格后30日内，甲方支付剩余款项。若乙方未能按约履行合同，应无条件退还预付款并支付相应利息。",
+      "status": "upheld",
+      "rejectReason": "",
+      "reVerifyJustification": "",
+      "disputed": false
+    },
+    {
+      "id": "w_acceptance_delivery-第三条-0",
+      "worker": "acceptance_delivery",
+      "clauseId": "第三条",
+      "clauseQuote": "甲方应在收到货物后 2 个工作日内完成验收",
+      "riskType": "验收期限过短",
+      "severity": "medium",
+      "legalBasis": {
+        "tier": "direct",
+        "articleId": "CIVIL-622",
+        "version": "中华人民共和国民法典（2021-01-01 施行）",
+        "quote": "当事人约定的检验期限过短，根据标的物的性质和交易习惯，买受人在检验期限内难以完成全面检验的，该期限仅为买受人对标的物的外观瑕疵提出异议的期限。"
+      },
+      "evidence": "验收期限为2个工作日，低于5个工作日阈值，且未区分外观瑕疵与隐蔽瑕疵，可能无法完成全面检验。",
+      "suggestion": "延长验收期限至不少于5个工作日，并区分外观瑕疵与隐蔽瑕疵的异议期限。",
+      "suggestionClauseText": "甲方应在收到货物后 5 个工作日内完成验收，验收标准按本合同第二条约定的质量标准执行。外观瑕疵应在验收时提出，隐蔽瑕疵应在验收后 15 日内提出。",
+      "status": "upheld",
+      "rejectReason": "",
+      "reVerifyJustification": "",
+      "disputed": false
+    },
+    {
+      "id": "w_breach_liability-第五条-0",
+      "worker": "breach_liability",
+      "clauseId": "第五条",
+      "clauseQuote": "任何一方违约的，应向守约方支付合同总价 10% 的违约金。甲方有权在任何时候单方解除本合同，无需承担任何责任。",
+      "riskType": "违约金过低",
+      "severity": "medium",
+      "legalBasis": {
+        "tier": "direct",
+        "articleId": "585",
+        "version": "中华人民共和国民法典（2021-01-01 施行）",
+        "quote": "约定的违约金低于造成的损失的，人民法院或者仲裁机构可以根据当事人的请求予以增加；约定的违约金过分高于造成的损失的，人民法院或者仲裁机构可以根据当事人的请求予以适当减少。"
+      },
+      "evidence": "违约金比例为合同总价的10%，且条款中未约定赔偿损失兜底，同时甲方单方解除合同无需承担任何责任，导致违约金条款落空。",
+      "suggestion": "提高违约金比例至合理水平（如20%-30%），并增加赔偿损失兜底条款；删除甲方单方解除合同无需承担任何责任的表述，或明确甲方违约时仍需承担违约责任。",
+      "suggestionClauseText": "任何一方违约的，应向守约方支付合同总价 20% 的违约金；违约金不足以弥补守约方实际损失的，违约方还应赔偿差额部分。甲方单方解除合同的，应提前30日书面通知乙方，并赔偿乙方因此遭受的实际损失。",
+      "status": "upheld",
+      "rejectReason": "",
+      "reVerifyJustification": "",
+      "disputed": false
+    },
+    {
+      "id": "w_termination-第五条-1",
+      "worker": "termination",
+      "clauseId": "第五条",
+      "clauseQuote": "任何一方违约的，应向守约方支付合同总价 10% 的违约金。",
+      "riskType": "解除后果不明",
+      "severity": "medium",
+      "legalBasis": {
+        "tier": "direct",
+        "articleId": "566",
+        "version": "中华人民共和国民法典（2021-01-01 施行）",
+        "quote": "合同解除后，尚未履行的，终止履行；已经履行的，根据履行情况和合同性质，当事人可以请求恢复原状或者采取其他补救措施，并有权请求赔偿损失。"
+      },
+      "evidence": "合同未约定解除后已付款项、已履行部分的结算及恢复原状等后果，仅约定违约金，不足以覆盖解除后的处理。",
+      "suggestion": "增加解除后果条款，明确已付款项退还、已履行部分结算、损失赔偿等。",
+      "suggestionClauseText": "合同解除后，尚未履行的终止履行；已经履行的，双方应根据履行情况恢复原状或采取其他补救措施，并有权请求赔偿损失。甲方已支付的款项扣除已履行部分对应价款后，剩余部分应于解除后10日内退还。",
+      "status": "upheld",
+      "rejectReason": "",
+      "reVerifyJustification": "",
+      "disputed": false
+    }
+  ],
+  "clauses": [
+    {
+      "clauseId": "第一条",
+      "quote": "第一条 合同标的：甲方向乙方采购工业网关，数量 1000 台，单价 2000 元，合同总价 2000000 元。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第二条",
+      "quote": "第二条 质量标准：乙方交付的货物应符合国家标准及双方确认的技术规格书。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第三条",
+      "quote": "第三条 交付与验收：乙方应于 2026年3月1日 前将货物交付至甲方指定地点。甲方应在收到货物后 2 个工作日内完成验收，验收标准按本合同第二条约定的质量标准执行。",
+      "riskLevel": "medium"
+    },
+    {
+      "clauseId": "第四条",
+      "quote": "第四条 付款方式：合同签订后 7 日内，甲方向乙方支付合同总价 90% 的预付款；货物验收合格后 30 日内，甲方支付剩余款项。",
+      "riskLevel": "high"
+    },
+    {
+      "clauseId": "第五条",
+      "quote": "第五条 违约责任：任何一方违约的，应向守约方支付合同总价 10% 的违约金。甲方有权在任何时候单方解除本合同，无需承担任何责任。",
+      "riskLevel": "medium"
+    },
+    {
+      "clauseId": "第六条",
+      "quote": "第六条 定金：双方约定定金为合同总价的 10%，甲方应于合同签订后 3 日内支付。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第七条",
+      "quote": "第七条 知识产权：乙方交付的货物所含知识产权归各自权利人所有；乙方保证其交付物不侵犯任何第三方知识产权。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第八条",
+      "quote": "第八条 保密：双方对合同内容及合作过程中知悉的对方商业秘密负有保密义务，保密期限为合同终止后两年；违反保密义务的，应赔偿对方因此遭受的损失。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第九条",
+      "quote": "第九条 不可抗力：因不可抗力不能履行合同的，根据不可抗力的影响部分或者全部免除责任，但应及时通知对方并提供证明。不可抗力指不能预见、不能避免且不能克服的客观情况。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第十条",
+      "quote": "第十条 争议解决：因本合同引起的争议，双方协商解决；协商不成的，向甲方所在地人民法院起诉。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第十一条",
+      "quote": "第十一条 通知送达：双方确认本合同首部所列地址为有效送达地址，地址变更应提前三个工作日书面通知对方。",
+      "riskLevel": null
+    },
+    {
+      "clauseId": "第十二条",
+      "quote": "第十二条 其他：本合同自双方盖章之日起生效，一式两份，甲乙双方各执一份。",
+      "riskLevel": null
+    }
+  ],
+  "meta": {
+    "reviewMode": "C",
+    "mock": false,
+    "generatedAt": "2026-08-16 12:57:32",
+    "latencyMs": 19699,
+    "reviewLog": [
+      {
+        "findingId": "w_payment_invoice-第四条-0",
+        "verdict": "upheld",
+        "clauseId": "第四条",
+        "riskType": "预付款比例过高",
+        "severity": "high",
+        "reason": "",
+        "wasRejectedByReviewer": false,
+        "revertedAfterReverify": false,
+        "upheldAfterReverify": false,
+        "verifyNote": "预付款90%远超常规，且无担保或退款机制，可能显失公平。法条引用为间接依据，但风险成立。"
+      },
+      {
+        "findingId": "w_payment_invoice-第五条-1",
+        "verdict": "upheld",
+        "clauseId": "第五条",
+        "riskType": "逾期付款违约金缺失",
+        "severity": "high",
+        "reason": "",
+        "wasRejectedByReviewer": false,
+        "revertedAfterReverify": false,
+        "upheldAfterReverify": false,
+        "verifyNote": "甲方任意解除且免责，乙方权益无保障，风险成立。法条为间接依据，但风险成立。"
+      },
+      {
+        "findingId": "w_acceptance_delivery-第三条-0",
+        "verdict": "upheld",
+        "clauseId": "第三条",
+        "riskType": "验收期限过短",
+        "severity": "medium",
+        "reason": "",
+        "wasRejectedByReviewer": false,
+        "revertedAfterReverify": false,
+        "upheldAfterReverify": false,
+        "verifyNote": "验收期2个工作日低于5个工作日阈值，且未区分瑕疵类型，符合CIVIL-622情形。法条核对准确。"
+      },
+      {
+        "findingId": "w_breach_liability-第五条-0",
+        "verdict": "upheld",
+        "clauseId": "第五条",
+        "riskType": "违约金过低",
+        "severity": "medium",
+        "reason": "",
+        "wasRejectedByReviewer": false,
+        "revertedAfterReverify": false,
+        "upheldAfterReverify": false,
+        "verifyNote": "违约金10%可能过低，且甲方任意解除免责导致条款落空。法条585为直接依据，但需实际损失判断，风险成立。"
+      },
+      {
+        "findingId": "w_breach_liability-第五条-1",
+        "verdict": "upheld",
+        "clauseId": "第五条",
+        "riskType": "违约救济不完整",
+        "severity": "high",
+        "reason": "",
+        "wasRejectedByReviewer": false,
+        "revertedAfterReverify": false,
+        "upheldAfterReverify": false,
+        "verifyNote": "任意解除且免责，显失公平，风险成立。法条为间接依据，但风险成立。"
+      },
+      {
+        "findingId": "w_breach_liability-第六条-2",
+        "verdict": "rejected",
+        "clauseId": "第六条",
+        "riskType": "定金条款违规",
+        "severity": "low",
+        "reason": "定金比例10%未超过20%法定上限，且合同未约定违约金与定金并用，无违规之处。",
+        "wasRejectedByReviewer": true,
+        "revertedAfterReverify": true,
+        "upheldAfterReverify": false,
+        "verifyNote": "法条586核对准确，但风险不成立。"
+      },
+      {
+        "findingId": "w_termination-第五条-0",
+        "verdict": "upheld",
+        "clauseId": "第五条",
+        "riskType": "单方解除条件失衡",
+        "severity": "high",
+        "reason": "",
+        "wasRejectedByReviewer": false,
+        "revertedAfterReverify": false,
+        "upheldAfterReverify": false,
+        "verifyNote": "任意解除权失衡，风险成立。法条为间接依据，但风险成立。"
+      },
+      {
+        "findingId": "w_termination-第五条-1",
+        "verdict": "upheld",
+        "clauseId": "第五条",
+        "riskType": "解除后果不明",
+        "severity": "medium",
+        "reason": "",
+        "wasRejectedByReviewer": false,
+        "revertedAfterReverify": false,
+        "upheldAfterReverify": false,
+        "verifyNote": "解除后果未约定，仅违约金不足以覆盖，风险成立。法条566为直接依据，核对准确。"
+      }
+    ],
+    "tokens": {
+      "input": 14782,
+      "output": 4384
+    },
+    "costYuan": 0.0646
+  }
+}

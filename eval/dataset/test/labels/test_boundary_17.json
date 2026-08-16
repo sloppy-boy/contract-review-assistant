@@ -1,0 +1,12 @@
+{
+  "contractId": "test_boundary_17",
+  "group": "boundary",
+  "family": "B",
+  "seed": 200,
+  "defects": [],
+  "boundary": {
+    "desc": "验收期 5 个工作日（对复杂设备是否过短有争议）",
+    "expert_tendency": "low",
+    "disputed": true
+  }
+}

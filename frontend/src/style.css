@@ -1,0 +1,136 @@
+/* ============ 合同审查助手 · 全局主题 ============ */
+:root {
+  /* 主色（法务蓝） */
+  --el-color-primary: #2563eb;
+  --el-color-primary-light-3: #5b8def;
+  --el-color-primary-light-5: #8fb2f4;
+  --el-color-primary-light-7: #c3d6f9;
+  --el-color-primary-light-8: #dbe6fc;
+  --el-color-primary-light-9: #eef3fe;
+  --el-color-primary-dark-2: #1d4ed8;
+
+  --bg-page: #f0f2f7;
+  --bg-card: #ffffff;
+  --ink: #1f2937;
+  --ink-2: #4b5563;
+  --ink-3: #9ca3af;
+  --line: #e5e7eb;
+  --radius: 10px;
+  --shadow: 0 1px 3px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --shadow-lg: 0 8px 24px rgba(16, 24, 40, 0.1);
+
+  /* 严重度 */
+  --sev-high: #dc2626;
+  --sev-high-bg: #fef2f2;
+  --sev-medium: #d97706;
+  --sev-medium-bg: #fffbeb;
+  --sev-low: #059669;
+  --sev-low-bg: #ecfdf5;
+}
+
+body {
+  margin: 0;
+  font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', -apple-system, sans-serif;
+  background: var(--bg-page);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app { min-height: 100vh; }
+
+/* 通用面板 */
+.panel {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  border: 1px solid var(--line);
+  padding: 16px 20px;
+}
+.panel-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.panel-title::before {
+  content: '';
+  width: 4px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--el-color-primary);
+}
+
+/* 风险卡片 */
+.risk-card {
+  margin-bottom: 12px;
+  border-left: 4px solid var(--ink-3);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: box-shadow 0.15s ease;
+}
+.risk-card:hover { box-shadow: var(--shadow-lg); }
+.risk-card.sev-high { border-left-color: var(--sev-high); }
+.risk-card.sev-medium { border-left-color: var(--sev-medium); }
+.risk-card.sev-low { border-left-color: var(--sev-low); }
+
+/* 条款导航 */
+.clause-nav-item {
+  padding: 9px 12px;
+  cursor: pointer;
+  border-radius: 8px;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 0.12s ease;
+  margin-bottom: 2px;
+}
+.clause-nav-item:hover { background: var(--el-color-primary-light-9); }
+.clause-nav-item.active {
+  background: var(--el-color-primary-light-8);
+  box-shadow: inset 0 0 0 1px var(--el-color-primary-light-5);
+}
+.clause-nav-item .dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none;
+}
+.dot.high { background: var(--sev-high); }
+.dot.medium { background: var(--sev-medium); }
+.dot.low { background: var(--sev-low); }
+.dot.none { background: #d1d5db; }
+.clause-nav-item .cid { color: var(--el-color-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+.clause-nav-item .cquote { color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+
+/* 风险分布条形 */
+.bar-row { display: flex; align-items: center; margin: 6px 0; }
+.bar-label { width: 44px; font-size: 12px; color: var(--ink-3); }
+.bar-track { flex: 1; background: #f3f4f6; border-radius: 6px; height: 12px; margin: 0 8px; overflow: hidden; }
+.bar-fill { height: 12px; border-radius: 6px; transition: width 0.5s ease; }
+.bar-fill.high { background: linear-gradient(90deg, #f87171, var(--sev-high)); }
+.bar-fill.medium { background: linear-gradient(90deg, #fbbf24, var(--sev-medium)); }
+.bar-fill.low { background: linear-gradient(90deg, #34d399, var(--sev-low)); }
+.bar-count { width: 34px; font-size: 12px; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* 统计大数字 */
+.stat-num { font-size: 30px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.stat-lbl { font-size: 12px; color: var(--ink-3); margin-top: 4px; }
+
+/* 引用块 */
+.quote-block {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--ink);
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+/* Element Plus 细节微调 */
+.el-card { border-radius: var(--radius); border-color: var(--line); }
+.el-card__header { font-weight: 600; }
+.el-button { border-radius: 8px; }
+.el-tag { border-radius: 6px; }

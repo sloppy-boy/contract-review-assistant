@@ -1,0 +1,29 @@
+{
+  "contractId": "dev_implant_00",
+  "group": "implant",
+  "family": "A",
+  "seed": 999,
+  "defects": [
+    {
+      "clauseId": "第五条",
+      "riskType": "单方解除条件失衡",
+      "severity": "high",
+      "defectId": "d_term_unilateral",
+      "variant": true
+    },
+    {
+      "clauseId": "第四条",
+      "riskType": "预付款比例过高",
+      "severity": "high",
+      "defectId": "d_prepay_90",
+      "variant": true
+    },
+    {
+      "clauseId": "第三条",
+      "riskType": "验收期限过短",
+      "severity": "medium",
+      "defectId": "d_accept_vague",
+      "variant": true
+    }
+  ]
+}

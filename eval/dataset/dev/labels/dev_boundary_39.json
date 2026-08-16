@@ -1,0 +1,12 @@
+{
+  "contractId": "dev_boundary_39",
+  "group": "boundary",
+  "family": "A",
+  "seed": 100,
+  "defects": [],
+  "boundary": {
+    "desc": "定金比例恰为 20%（法定上限临界，超过部分效力有争议）",
+    "expert_tendency": "low",
+    "disputed": true
+  }
+}

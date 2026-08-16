@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# 密钥与环境（API key 只从环境变量读，禁止提交）
+.env
+
+# 运行时产物（评测报告输出、嵌入缓存）
+eval/output/
+.cache/
+
+# 前端
+node_modules/
+frontend/dist/
+
+# 大模型文件（OCR 等，SPEC 2.3：模型文件入 gitignore）
+*.onnx
+*.pdmodel
+*.pdiparams
+
+# 测试/工具缓存
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.tmp/
+*.egg-info/
+
+# IDE / 系统文件
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 临时导出产物
+scripts/_test_export*

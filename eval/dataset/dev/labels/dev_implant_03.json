@@ -1,0 +1,15 @@
+{
+  "contractId": "dev_implant_03",
+  "group": "implant",
+  "family": "A",
+  "seed": 100,
+  "defects": [
+    {
+      "clauseId": "第十条",
+      "riskType": "只约定仲裁未约定仲裁机构/地点",
+      "severity": "medium",
+      "defectId": "d_arb_no_org",
+      "variant": false
+    }
+  ]
+}

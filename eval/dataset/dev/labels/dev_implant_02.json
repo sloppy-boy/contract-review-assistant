@@ -1,0 +1,15 @@
+{
+  "contractId": "dev_implant_02",
+  "group": "implant",
+  "family": "A",
+  "seed": 100,
+  "defects": [
+    {
+      "clauseId": "第四条",
+      "riskType": "付款期限过长",
+      "severity": "medium",
+      "defectId": "d_pay_120",
+      "variant": false
+    }
+  ]
+}

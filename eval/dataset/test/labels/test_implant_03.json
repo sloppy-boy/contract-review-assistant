@@ -1,0 +1,15 @@
+{
+  "contractId": "test_implant_03",
+  "group": "implant",
+  "family": "B",
+  "seed": 200,
+  "defects": [
+    {
+      "clauseId": "5",
+      "riskType": "竞业限制范围过宽",
+      "severity": "high",
+      "defectId": "d_nc_unbounded",
+      "variant": true
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "contractId": "dev_implant_05",
+  "group": "implant",
+  "family": "A",
+  "seed": 100,
+  "defects": [
+    {
+      "clauseId": "第五条",
+      "riskType": "逾期付款违约金缺失",
+      "severity": "medium",
+      "defectId": "d_pay_waive",
+      "variant": true
+    }
+  ]
+}
