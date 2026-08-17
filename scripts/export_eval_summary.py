@@ -33,8 +33,8 @@ def _export_split(split: str) -> dict:
         agg["cleanFpRate"] = round(sum(fp) / len(fp), 3) if fp else None
         agg["boundary"] = sc.boundary_metrics(boundaries, reports)
         agg["reviewModule"] = sc.review_module_metrics(implants, reports)
-        agg["costPerContract"] = sc._cost(reports)
-        agg["latencyPerContract"] = sc._latency(reports)
+        agg["costPerContract"] = sc.avg_cost(reports)
+        agg["latencyPerContract"] = sc.avg_latency(reports)
         out[mode] = agg
     base = out.get("baseline", {})
     c = out.get("C", {})

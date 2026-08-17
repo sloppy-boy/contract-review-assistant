@@ -13,11 +13,17 @@ import re
 import sys
 from pathlib import Path
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8")  # Windows GBK 控制台 ✅/❌ 崩溃修复
+except Exception:
+    pass
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.legal.manual import load_manual, load_manual_meta  # noqa: E402
 
-MANUAL_PATH = Path("app/legal/manual_data.json")
+ROOT = Path(__file__).resolve().parent.parent
+MANUAL_PATH = ROOT / "app" / "legal" / "manual_data.json"
 
 FORBIDDEN = ["合同法（1999", "《中华人民共和国合同法》", "1999 年合同法", "旧合同法"]
 

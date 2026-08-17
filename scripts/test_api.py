@@ -8,12 +8,13 @@ import httpx
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 BASE = f"http://127.0.0.1:{sys.argv[1] if len(sys.argv) > 1 else '8011'}"
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def main() -> None:
     h = httpx.get(f"{BASE}/health", timeout=10)
     print("health:", h.json())
-    demo = Path("eval/dataset/demo/demo_high.txt").read_text(encoding="utf-8")
+    demo = (ROOT / "eval/dataset/demo/demo_high.txt").read_text(encoding="utf-8")
     r = httpx.post(
         f"{BASE}/upload",
         data={"text": demo, "contract_type": "purchase"},

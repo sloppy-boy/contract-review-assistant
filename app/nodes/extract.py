@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from typing import Any
@@ -16,15 +17,10 @@ from typing import Any
 from pydantic import ValidationError
 
 from ..config import SCHEMA_MAX_RETRIES, using_mock
-from ..llm import LLMClient, LLMError
+from ..llm import BalanceError, LLMClient, LLMError
+from ..patterns import AMOUNT_RE, CLAUSE_TOP_RE, DAYS_RE, PCT_RE, REF_RE, SUB_NUM_RE
 from ..state import ClauseFact, ContractState
 
-_CLAUSE_TOP_RE = re.compile(r"(?m)^\s*(第[0-9一二三四五六七八九十百千零两]+条)")
-_SUB_NUM_RE = re.compile(r"(?m)^\s*(\d+(?:\.\d+)*)\s*[、.．]")
-_REF_RE = re.compile(r"第\s*([0-9一二三四五六七八九十百千零两]+)\s*条")
-_AMOUNT_RE = re.compile(r"([\d,]+(?:\.\d+)?)\s*(?:万|亿)?\s*元")
-_DAYS_RE = re.compile(r"(\d+)\s*(?:个)?(?:工作日|天|日)")
-_PCT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[%％]")
 _MONTHS_RE = re.compile(r"(\d+)\s*(?:个)?月")
 _BLANK_RE = re.compile(r"此处\s*空白|暂无|无内容|^$", re.M)
 
@@ -58,7 +54,7 @@ def split_into_chunks(text: str, max_chars: int = 4000) -> list[str]:
     if not text:
         return []
     # 主切分：第X条
-    matches = list(_CLAUSE_TOP_RE.finditer(text))
+    matches = list(CLAUSE_TOP_RE.finditer(text))
     if len(matches) >= 2:
         chunks = []
         for i, m in enumerate(matches):
@@ -66,7 +62,7 @@ def split_into_chunks(text: str, max_chars: int = 4000) -> list[str]:
             chunks.append(text[m.start() : end].strip())
         return _coalesce(chunks, max_chars)
     # 次切分：X.Y 编号
-    sub = list(_SUB_NUM_RE.finditer(text))
+    sub = list(SUB_NUM_RE.finditer(text))
     if len(sub) >= 2:
         chunks = []
         for i, m in enumerate(sub):
@@ -94,8 +90,16 @@ def _coalesce(chunks: list[str], max_chars: int) -> list[str]:
 
 
 def _first_clause_id(chunk: str) -> str:
-    m = _CLAUSE_TOP_RE.search(chunk) or _SUB_NUM_RE.search(chunk)
-    return m.group(1) if m else f"c{abs(hash(chunk)) % 100000}"
+    m = CLAUSE_TOP_RE.search(chunk) or SUB_NUM_RE.search(chunk)
+    if m:
+        return m.group(1)
+    return _stable_clause_id(chunk)
+
+
+def _stable_clause_id(text: str) -> str:
+    """无条款号兜底：跨运行稳定哈希（S4：str hash 按进程加盐，不可复现）。"""
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return f"c{int(digest[:8], 16) % 100000}"
 
 
 # ---------------------------------------------------------------- mock/规则模式抽取
@@ -103,14 +107,14 @@ def _rule_extract(chunk: str) -> list[ClauseFact]:
     """正则抽取：条款号 + 原文 + 关键数值 + 引用（确定性，mock 链路自检用）。"""
     facts: list[ClauseFact] = []
     # 逐条切分（第X条 或 X.Y 编号）
-    tops = list(_CLAUSE_TOP_RE.finditer(chunk))
+    tops = list(CLAUSE_TOP_RE.finditer(chunk))
     if tops:
         segs: list[tuple[str, str]] = []
         for i, m in enumerate(tops):
             end = tops[i + 1].start() if i + 1 < len(tops) else len(chunk)
             segs.append((m.group(1), chunk[m.start() : end]))
     else:
-        subs = list(_SUB_NUM_RE.finditer(chunk))
+        subs = list(SUB_NUM_RE.finditer(chunk))
         if subs:
             segs = []
             for i, m in enumerate(subs):
@@ -129,7 +133,7 @@ def _rule_extract(chunk: str) -> list[ClauseFact]:
                                     definitions={}, references=[]))
             continue
         kn: dict[str, float | str] = {}
-        for m in _AMOUNT_RE.finditer(seg):
+        for m in AMOUNT_RE.finditer(seg):
             try:
                 kn["amount"] = float(m.group(1).replace(",", ""))
                 break
@@ -138,18 +142,18 @@ def _rule_extract(chunk: str) -> list[ClauseFact]:
         # 付款期限取条款内最大天数（"预付款 7 日内 + 余款 120 日内" → 120），与规则基线口径一致
         pay_days = [
             float(m.group(1))
-            for m in _DAYS_RE.finditer(seg)
+            for m in DAYS_RE.finditer(seg)
             if "付" in seg or "款" in seg or "验收" in seg or "检验" in seg
         ]
         if pay_days:
             kn["paymentDays"] = max(pay_days)
-        for m in _PCT_RE.finditer(seg):
+        for m in PCT_RE.finditer(seg):
             kn.setdefault("penaltyRatio", float(m.group(1)))
         for m in _MONTHS_RE.finditer(seg):
             if "质保" in seg or "保修" in seg or "保证期" in seg:
                 kn.setdefault("warrantyMonths", float(m.group(1)))
         refs: list[str] = []
-        for m in _REF_RE.finditer(seg):
+        for m in REF_RE.finditer(seg):
             ref = f"第{m.group(1)}条"
             if ref not in refs:
                 refs.append(ref)
@@ -187,6 +191,8 @@ def _llm_extract_chunk(llm: LLMClient, chunk: str) -> list[ClauseFact]:
                 except ValidationError:
                     continue  # 单条坏数据跳过，不崩链
             return facts
+        except BalanceError:  # 余额耗尽：全局性错误，冒泡显式失败（防输出空报告误导）
+            raise
         except (LLMError, json.JSONDecodeError) as e:
             if attempt < SCHEMA_MAX_RETRIES:
                 continue
@@ -213,6 +219,8 @@ def _global_link(llm: LLMClient, facts: list[ClauseFact]) -> tuple[dict[str, str
                 if isinstance(r, dict)
             ]
             return dict(defs), refs
+        except BalanceError:  # 余额耗尽：冒泡（同上）
+            raise
         except (LLMError, json.JSONDecodeError):
             if attempt < SCHEMA_MAX_RETRIES:
                 continue
@@ -227,7 +235,7 @@ def _rule_global_link(facts: list[ClauseFact]) -> tuple[dict[str, str], list[tup
     # 引用匹配：clauseId 文本中提到的其他"第X条"→ 目标 clauseId
     id_map = {f.clauseId: f for f in facts}
     for f in facts:
-        for m in _REF_RE.finditer(f.quote):
+        for m in REF_RE.finditer(f.quote):
             target = f"第{m.group(1)}条"
             if target in id_map and target != f.clauseId:
                 refs.append((f.clauseId, target, "引用"))

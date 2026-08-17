@@ -23,7 +23,7 @@ from ..config import (
 )
 from ..legal.risk_matrix import RISK_MATRIX, SUBTYPE_TO_CATEGORY, WORKER_CATEGORIES
 from ..legal.rule_checker import rule_baseline_findings
-from ..llm import LLMClient, LLMError
+from ..llm import BalanceError, LLMClient, LLMError
 from ..state import ClauseFact, ContractState, Finding, RiskItemOut
 
 # 每类 worker 的条款触发关键词（与风险矩阵 checklist 对应；覆盖缺失型/免责型表述）
@@ -214,6 +214,8 @@ def build_worker_node(category: str, retriever, llm: LLMClient | None = None):
                     except ValidationError:
                         continue  # 单条坏数据跳过，不崩链
                 break
+            except BalanceError:  # 余额耗尽：全局性错误，冒泡显式失败（防空报告误导）
+                raise
             except (LLMError, json.JSONDecodeError):
                 if attempt < SCHEMA_MAX_RETRIES:
                     continue

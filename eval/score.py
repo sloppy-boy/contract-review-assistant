@@ -83,13 +83,17 @@ def score_contract(label: dict, report: dict) -> dict:
             if s > best_s:
                 best_s, best_i = s, i
         if best_i is not None:
+            r = risks[best_i]  # S14：按 best 匹配的 risk 直接逐字段判定（0.7 分时 severity 也计数）
             matched.add(best_i)
             partial += best_s
             if best_s >= 0.999:  # 严格命中
                 hits += 1
-            for key, w in (("clause", 0.4), ("riskType", 0.3), ("severity", 0.3)):
-                if best_s >= (1.0 - w + 0.001):
-                    hit_fields[key] += 1
+            if normalize_clause_id(d.get("clauseId")) == normalize_clause_id(r.get("clauseId")):
+                hit_fields["clause"] += 1
+            if d.get("riskType") == r.get("riskType"):
+                hit_fields["riskType"] += 1
+            if d.get("severity") == r.get("severity"):
+                hit_fields["severity"] += 1
     return {
         "contractId": label.get("contractId"),
         "group": label.get("group"),
@@ -257,22 +261,22 @@ def main() -> None:
         agg["cleanFpRate"] = round(sum(fp_rates) / len(fp_rates), 3) if fp_rates else None
         agg["boundary"] = boundary_metrics(boundaries, reports)
         agg["reviewModule"] = review_module_metrics(implants, reports)
-        agg["costPerContract"] = _cost(reports)
-        agg["latencyPerContract"] = _latency(reports)
+        agg["costPerContract"] = avg_cost(reports)
+        agg["latencyPerContract"] = avg_latency(reports)
         results[mode] = agg
 
     _print_table(results, modes, args.split)
     _check_pass(results, args.split)
 
 
-def _cost(reports: dict[str, dict]) -> float | None:
+def avg_cost(reports: dict[str, dict]) -> float | None:
     """成本/份（元）：meta 无 token 时返回 None（mock/估算无效）。"""
     vals = [r.get("meta", {}).get("costYuan") for r in reports.values()]
     vals = [v for v in vals if v is not None]
     return round(sum(vals) / len(vals), 4) if vals else None
 
 
-def _latency(reports: dict[str, dict]) -> float | None:
+def avg_latency(reports: dict[str, dict]) -> float | None:
     """延迟/份（秒）：meta.latencyMs 为毫秒（全流水线耗时），换算为秒。"""
     vals = [r.get("meta", {}).get("latencyMs") for r in reports.values()]
     vals = [v for v in vals if v is not None]

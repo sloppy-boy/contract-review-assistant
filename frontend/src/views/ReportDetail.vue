@@ -206,12 +206,17 @@ function onClauseClick(c) {
 // 双向联动：点风险卡片 → 高亮条款导航并滚动
 function onRiskClick(r) {
   activeClause.value = r.clauseId
-  const navItems = document.querySelectorAll('.clause-nav-item')
-  navItems.forEach((n) => {
-    if (n.textContent.includes(r.clauseId)) {
-      n.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-    }
-  })
+  // S15：规范化精确匹配条款号（'第三条'/'第3条'/'3' 归一为 '3'），
+  // 避免短条款号（如 '3'）用 includes 误中 '13/30/3.1' 等其它导航项
+  const norm = (s) => String(s || '').replace(/[第条\s.]/g, '')
+  const target = norm(r.clauseId)
+  const items = [...document.querySelectorAll('.clause-nav-item')]
+  let hit = items.find((n) => norm(n.querySelector('.cid')?.textContent) === target)
+  // 兜底：精确不中且条款号足够辨识时，再尝试文本包含匹配（保留旧体验）
+  if (!hit && target.length >= 2) {
+    hit = items.find((n) => n.textContent.includes(r.clauseId))
+  }
+  hit?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
 }
 
 function copy(text) {

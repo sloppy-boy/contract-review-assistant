@@ -35,8 +35,49 @@ class LLMError(RuntimeError):
     """LLM 调用失败（重试后仍失败）。"""
 
 
+class BalanceError(LLMError):
+    """API 供应商余额不足 / 账户不可用（停止服务）。
+
+    全局性错误：所有 LLM 调用都会失败，必须冒泡让任务显式失败并提示用户，
+    不能走"部分成功"降级（否则输出空报告误导用户「无风险」）。
+    """
+
+
 class _Retryable(RuntimeError):
     """可重试错误（429 限流 / 5xx / 网络抖动）。"""
+
+
+_BALANCE_HINTS = (
+    "insufficient_balance",
+    "insufficient balance",
+    "balance not enough",
+    "balance exhausted",
+    "insufficient quota",
+    "quota exceeded",
+    "account suspended",
+    "account disabled",
+    "欠费",
+    "余额不足",
+    "余额用完",
+    "账户已停用",
+)
+
+
+def classify_balance_error(status: int, body: str) -> BalanceError | None:
+    """识别余额/配额类错误（402 Payment Required + 余额关键词）。返回 BalanceError 或 None。
+
+    独立纯函数：便于单测；chat() 与上游可复用同一判定。
+    """
+    body_l = (body or "").lower()
+    if status == 402:
+        return BalanceError(f"API 供应商余额不足或停止服务（HTTP 402）: {body[:200]}")
+    if status in (400, 401, 403, 429, 500, 502, 503, 504):
+        for hint in _BALANCE_HINTS:
+            if hint in body_l:
+                return BalanceError(
+                    f"API 供应商余额不足或停止服务（HTTP {status}）: {body[:200]}"
+                )
+    return None
 
 
 class LLMClient:
@@ -96,6 +137,10 @@ class LLMClient:
                         },
                         json=payload,
                     )
+                    # 余额/配额类错误（402 或余额关键词）→ 直接失败并冒泡（全局性错误）
+                    balance_err = classify_balance_error(resp.status_code, resp.text)
+                    if balance_err is not None:
+                        raise balance_err
                     # 限流/服务端错误 → 可重试
                     if resp.status_code in (429, 500, 502, 503, 504):
                         raise _Retryable(f"HTTP {resp.status_code}: {resp.text[:120]}")
@@ -106,16 +151,20 @@ class LLMClient:
                         self.total_input_tokens += int(usage.get("prompt_tokens", 0) or 0)
                         self.total_output_tokens += int(usage.get("completion_tokens", 0) or 0)
                     return data["choices"][0]["message"]["content"]
+                except BalanceError:  # 余额不足：原样冒泡（上游显式失败并提示）
+                    raise
                 except _Retryable as e:
                     last_err = e
                     if attempt < self.max_retries:
                         time.sleep(_backoff(attempt))
                 except httpx.HTTPStatusError as e:  # 4xx（401/400 等）重试无意义，直接失败
                     raise LLMError(f"chat failed (HTTP {e.response.status_code}): {e.response.text[:120]}")
-                except Exception as e:  # 网络/超时 → 可重试
+                except (httpx.TimeoutException, httpx.NetworkError) as e:  # 网络/超时 → 可重试
                     last_err = e
                     if attempt < self.max_retries:
                         time.sleep(_backoff(attempt))
+                except Exception as e:  # 编程错误（KeyError/TypeError 等）不重试，暴露根因（S5）
+                    raise LLMError(f"chat failed (non-retryable): {e!r}") from e
         raise LLMError(f"chat failed after {self.max_retries + 1} attempts: {last_err}")
 
     # ------------------------------------------------------------------ JSON 结构化调用

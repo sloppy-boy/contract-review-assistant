@@ -4,10 +4,11 @@ from collections import Counter
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+ROOT = Path(__file__).resolve().parent.parent  # S9：绝对路径（与 config.ROOT 一致）
 for split in ("dev", "test"):
     c = Counter()
     n = 0
-    for lp in sorted((Path("eval/dataset") / split / "labels").glob("*.json")):
+    for lp in sorted((ROOT / "eval/dataset" / split / "labels").glob("*.json")):
         l = json.loads(lp.read_text(encoding="utf-8"))
         if l["group"] != "implant":
             continue

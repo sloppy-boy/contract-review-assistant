@@ -10,10 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config import REPORT_CACHE_DIR, using_mock  # noqa: E402
+from app.config import DEMO_CONTRACT_DIR, REPORT_CACHE_DIR, using_mock  # noqa: E402
 from app.graph import run_pipeline  # noqa: E402
-
-DEMO = Path("eval/dataset/demo")
 
 
 def main() -> None:
@@ -22,7 +20,7 @@ def main() -> None:
         print("[warn] mock 模式导出无效（缓存必须是真实 pipeline 输出），请配置 key 后运行")
     REPORT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     for name in ("demo_high", "demo_clean", "demo_boundary"):
-        text = (DEMO / f"{name}.txt").read_text(encoding="utf-8")
+        text = (DEMO_CONTRACT_DIR / f"{name}.txt").read_text(encoding="utf-8")
         report = run_pipeline(text, contract_type="purchase", contract_name=name, review_mode=mode)
         p = REPORT_CACHE_DIR / f"{name}.json"
         p.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

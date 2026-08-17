@@ -49,7 +49,12 @@ def report_node(state: ContractState, mode: str | None = None) -> dict:
         risk_cards.append(d)
 
     # 条款导航（含风险级别红/黄/绿）
-    risk_clause_ids = {f.clauseId: f.severity for f in effective}
+    # S8：同条款多个 findings 时取最高严重度（后写覆盖会丢更严重档）
+    risk_clause_ids: dict[str, str] = {}
+    for f in effective:
+        cur = risk_clause_ids.get(f.clauseId)
+        if cur is None or _SEVERITY_ORDER.get(f.severity, 9) < _SEVERITY_ORDER.get(cur, 9):
+            risk_clause_ids[f.clauseId] = f.severity
     clause_nav = []
     for c in clauses:
         sev = risk_clause_ids.get(c.clauseId)

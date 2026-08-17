@@ -5,8 +5,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from eval.score import normalize_clause_id
 
-labels_dir = Path("eval/dataset/dev/labels")
-reports_dir = Path("eval/output/C/dev")
+ROOT = Path(__file__).resolve().parent.parent  # S9：绝对路径（与 config.ROOT 一致）
+labels_dir = ROOT / "eval/dataset/dev/labels"
+reports_dir = ROOT / "eval/output/C/dev"
 
 missed = Counter()
 hit_ids = []

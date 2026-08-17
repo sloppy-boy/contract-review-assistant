@@ -31,25 +31,37 @@ def blind_label_one(contract_text: str) -> dict | None:
         return None
     import httpx
 
-    with httpx.Client(timeout=180) as client:
-        resp = client.post(
-            f"{SILICONFLOW_BASE_URL}/chat/completions",
-            headers={"Authorization": f"Bearer {SILICONFLOW_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": LABEL_MODEL,
-                "messages": [
-                    {"role": "system", "content": BLIND_SYSTEM},
-                    {"role": "user", "content": contract_text[:6000]},
-                ],
-                "response_format": {"type": "json_object"},
-                "temperature": 0.1,
-                "max_tokens": 2000,
-                "thinking": {"type": "disabled"},  # Qwen3 系列默认 thinking，盲标质检无需深度思考
-            },
-        )
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
-    return json.loads(content)
+    # S11：单次 HTTP 失败不再中断整批盲标——最多重试 2 次（指数退避），仍失败返回 None
+    last_err: Exception | None = None
+    for attempt in range(3):
+        try:
+            with httpx.Client(timeout=180) as client:
+                resp = client.post(
+                    f"{SILICONFLOW_BASE_URL}/chat/completions",
+                    headers={"Authorization": f"Bearer {SILICONFLOW_API_KEY}", "Content-Type": "application/json"},
+                    json={
+                        "model": LABEL_MODEL,
+                        "messages": [
+                            {"role": "system", "content": BLIND_SYSTEM},
+                            {"role": "user", "content": contract_text[:6000]},
+                        ],
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0.1,
+                        "max_tokens": 2000,
+                        "thinking": {"type": "disabled"},  # Qwen3 系列默认 thinking，盲标质检无需深度思考
+                    },
+                )
+                resp.raise_for_status()
+                content = resp.json()["choices"][0]["message"]["content"]
+            return json.loads(content)
+        except Exception as e:  # 网络/5xx/JSON 解析失败均重试；编程错误也会在 3 次后暴露
+            last_err = e
+            if attempt < 2:
+                import time
+
+                time.sleep(1.5 * (2 ** attempt))
+    print(f"  [warn] 盲标失败（重试 3 次）：{last_err!r}")
+    return None
 
 
 def _semantic_match(g: tuple, p: tuple) -> bool:
@@ -95,7 +107,8 @@ def main() -> None:
     if not SILICONFLOW_API_KEY:
         print("[skip] 无 SILICONFLOW_API_KEY（盲标需硅基流动 Qwen）")
         return
-    dataset = Path("eval/dataset") / args.split
+    root = Path(__file__).resolve().parent.parent  # S9：绝对路径（与 config.ROOT 一致）
+    dataset = root / "eval/dataset" / args.split
     labels = sorted((dataset / "labels").glob("*.json"))
     implants = [l for l in labels if json.loads(l.read_text(encoding="utf-8"))["group"] == "implant"]
     results = []

@@ -7,13 +7,9 @@
 """
 from __future__ import annotations
 
-import re
-
+from ..patterns import DAYS_RE, PCT_RE
 from ..state import ClauseFact, Finding, LegalBasis
 
-_PCT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[%％]")
-_DAYS_RE = re.compile(r"(\d+)\s*(?:个)?(?:工作日|天|日)")
-_AMOUNT_RE = re.compile(r"([\d,]+(?:\.\d+)?)\s*(?:万|亿)?\s*元")
 # 朴素规则（刻意简单；更复杂判定留给 worker）
 # "赔偿"刻意不含在内：保密/瑕疵担保条款的"赔偿"字样与付款逾期责任无关，否则规则永不触发
 _NO_PENALTY_WORDS = ("违约金", "逾期", "滞纳金")
@@ -29,7 +25,7 @@ def rule_baseline_findings(clauses: list[ClauseFact]) -> list[Finding]:
         text = c.quote
         # --- 规则 1：违约金比例 > 30% → high（民法典 585 可调减）
         if "违约金" in text:
-            for m in _PCT_RE.finditer(text):
+            for m in PCT_RE.finditer(text):
                 ratio = float(m.group(1))
                 if ratio > 30:
                     out.append(
@@ -47,7 +43,7 @@ def rule_baseline_findings(clauses: list[ClauseFact]) -> list[Finding]:
                     break
         # --- 规则 2：定金比例 > 20% → medium（民法典 586）
         if "定金" in text:
-            for m in _PCT_RE.finditer(text):
+            for m in PCT_RE.finditer(text):
                 ratio = float(m.group(1))
                 if ratio > 20:
                     out.append(
@@ -66,7 +62,7 @@ def rule_baseline_findings(clauses: list[ClauseFact]) -> list[Finding]:
         # --- 规则 3：付款期限 > 90 天且全合同无逾期违约金/赔偿字样 → medium
         if "付" in text or "款" in text:
             days = None
-            for m in _DAYS_RE.finditer(text):
+            for m in DAYS_RE.finditer(text):
                 days = int(m.group(1))
             if days is not None and days > 90 and not any(w in all_text for w in _NO_PENALTY_WORDS):
                 out.append(

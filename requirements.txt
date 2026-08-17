@@ -1,7 +1,6 @@
 # 合同审查助手 · Python 依赖（Python 3.11+）
 langgraph>=0.2.50
 langchain-core>=0.3.0
-openai>=1.40.0
 httpx>=0.27.0
 fastapi>=0.115.0
 uvicorn>=0.30.0

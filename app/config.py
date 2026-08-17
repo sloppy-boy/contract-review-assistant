@@ -71,6 +71,14 @@ LLM_MAX_RETRIES = 2      # 超时/网络重试
 SCHEMA_MAX_RETRIES = 1    # schema 解析失败重试 1 次（SPEC 2.9）
 EMBED_CACHE_PATH = ROOT / ".cache" / "embed_cache.json"
 
+# ---------------------------------------------------------------- 上传护栏（S6）
+# 服务端上传大小上限（字符）：防超大合同全文直入 LLM 流水线烧成本（README "<1 元/份" 护栏）
+MAX_UPLOAD_CHARS = int(os.environ.get("MAX_UPLOAD_CHARS", "200000"))
+
+# ---------------------------------------------------------------- 余额预警
+# 前端余额预警阈值（元）：余额 ≤ 该值时横幅预警；余额 ≤ 0 或账户不可用时阻止使用并提示停止服务
+BALANCE_WARN_THRESHOLD = float(os.environ.get("BALANCE_WARN_THRESHOLD", "5.0"))
+
 # ---------------------------------------------------------------- 路径
 DATASET_DIR = ROOT / "eval" / "dataset"
 MANUAL_JSON_PATH = ROOT / "app" / "legal" / "manual_data.json"
@@ -94,5 +102,37 @@ MANUAL_AUDIT_RATIO = 0.2
 
 def using_mock() -> bool:
     """无 key 时返回 True：系统进入规则降级 mock 模式（仅链路自检，数字无效）。
-    DSH_FORCE_MOCK=1 可强制 mock（smoke_test 链路自检用，防误烧真实 token）。"""
+    DSH_FORCE_MOCK=1 可强制 mock（smoke_test 链路自检用，防误烧真实 token）。
+
+    注意：主链路 key 可能来自 settings.json 的任意供应商（settings_store.active_llm_config），
+    因此 graph.run_pipeline 以"主供应商是否配齐 key + DSH_FORCE_MOCK"为准；
+    此处保留 env 口径（无 DEEPSEEK_API_KEY 且未强制）供无需 LLM 的环节使用。
+    """
     return (not DEEPSEEK_API_KEY) or os.environ.get("DSH_FORCE_MOCK", "") == "1"
+
+
+def apply_common_settings() -> None:
+    """settings.json 的 common 字段 → 覆盖本模块常量（重启后端生效；env 优先已在 defaults 内体现）。
+
+    在 settings_store 定义之后调用（见 config 文件底部）。"""
+    try:
+        from .settings_store import load_settings  # 延迟导入避免循环依赖
+
+        common = load_settings().get("common") or {}
+    except Exception:
+        return
+    global REVIEW_MODE, WORKER_INPUT_BUDGET_TOKENS, TOP_K_ARTICLES, MAX_UPLOAD_CHARS, BALANCE_WARN_THRESHOLD
+    if "reviewMode" in common and str(common["reviewMode"]).upper() in {"A", "B", "C"}:
+        REVIEW_MODE = str(common["reviewMode"]).upper()
+    if "workerBudgetTokens" in common:
+        WORKER_INPUT_BUDGET_TOKENS = int(common["workerBudgetTokens"])
+    if "topKArticles" in common:
+        TOP_K_ARTICLES = int(common["topKArticles"])
+    if "maxUploadChars" in common:
+        MAX_UPLOAD_CHARS = int(common["maxUploadChars"])
+    if "balanceThreshold" in common:
+        BALANCE_WARN_THRESHOLD = float(common["balanceThreshold"])
+
+
+# settings.json 的 common 字段覆盖默认值（env 优先；重启后端生效）
+apply_common_settings()

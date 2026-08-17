@@ -144,5 +144,5 @@ python scripts/check_demo_cache.py
 | 评测报告（210 份） | `eval/output/` |
 | 评测汇总（前端用） | `frontend/public/eval-results.json` |
 | 离线演示缓存 | `frontend/public/reports/`（3 份真实导出） |
-| 测试/工具脚本 | `scripts/`（smoke_test / run-eval / score 入口 / check_report_schema / verify_manual / check_demo_cache / test_api / export_eval_summary / export_demo / inventory） |
+| 测试/工具脚本 | `scripts/`（smoke_test / run-eval / score 入口 / check_report_schema / verify_manual / check_demo_cache / test_api / export_eval_summary / export_demo / inventory / **analyze_missed / check_coverage / smoke_real**） |
 | 测试报告（本文档） | `docs/TESTING.md` |

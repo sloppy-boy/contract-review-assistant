@@ -8,6 +8,11 @@ import json
 import sys
 from pathlib import Path
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8")  # Windows GBK 控制台 ✓/✗ 崩溃修复
+except Exception:
+    pass
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 REQUIRED_RISK_FIELDS = {
@@ -57,14 +62,15 @@ def check_report(report: dict) -> list[str]:
 
 
 def main() -> None:
+    root = Path(__file__).resolve().parent.parent  # S9：与 config.ROOT 一致的绝对路径
     targets = []
     if len(sys.argv) > 1:
         targets.append(Path(sys.argv[1]))
     else:
         # 检查 eval/output 全部真实报告 + demo 缓存
-        for p in sorted(Path("eval/output").rglob("*.json")):
+        for p in sorted((root / "eval/output").rglob("*.json")):
             targets.append(p)
-        for p in sorted(Path("frontend/public/reports").glob("*.json")):
+        for p in sorted((root / "frontend/public/reports").glob("*.json")):
             targets.append(p)
     total = 0
     for p in targets:

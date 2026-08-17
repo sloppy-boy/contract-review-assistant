@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 from ..config import SCHEMA_MAX_RETRIES, using_mock
 from ..legal.manual import load_manual
-from ..llm import LLMClient, LLMError
+from ..llm import BalanceError, LLMClient, LLMError
 from ..state import ContractState, Finding, ReviewResult
 
 REVIEW_SYSTEM = (
@@ -85,6 +85,8 @@ def _reverify(
             if decision == "uphold":
                 return "disputed", justification
             return "rejected", justification
+        except BalanceError:  # 余额耗尽：冒泡（全局性错误）
+            raise
         except (LLMError, json.JSONDecodeError):
             if attempt < SCHEMA_MAX_RETRIES:
                 continue
@@ -92,8 +94,20 @@ def _reverify(
     return "rejected", "重证调用失败，默认撤回"
 
 
-def build_reviewer_node(retriever, llm: LLMClient | None = None, mode: str = "B", verify: bool = True):
-    """构造复核节点。mode: B 直滤 / C 打回重证；verify: 查证模式开关。"""
+def build_reviewer_node(
+    retriever,
+    llm: LLMClient | None = None,
+    reviewer: LLMClient | None = None,
+    mode: str = "B",
+    verify: bool = True,
+):
+    """构造复核节点。mode: B 直滤 / C 打回重证；verify: 查证模式开关。
+
+    reviewer：复核 thinking 档客户端（deepseek-reasoner，独立单价）——复核裁决
+    走 thinking 档（M1 修复：复核模型路由接通）；缺省回退主 llm（兼容旧调用）。
+    打回重证（_reverify）仍用主 llm（重证者是"原风险识别 worker"，与主链路同档）。
+    """
+    review_client = reviewer if reviewer is not None else llm
 
     def node(state: ContractState) -> dict:
         findings: list[Finding] = state.get("findings", [])
@@ -111,7 +125,7 @@ def build_reviewer_node(retriever, llm: LLMClient | None = None, mode: str = "B"
                 results.append(_mk_result(f, "upheld", reason="", verifyNote="mock"))
             return {"findings": updated, "review_results": results}
 
-        if llm is None:
+        if review_client is None:
             raise RuntimeError("reviewer_node requires LLMClient (non-mock)")
 
         # ---- 组装复核输入：发现 + 条款事实 + 引用的法条原文 + 检索相关法条 ----
@@ -134,8 +148,9 @@ def build_reviewer_node(retriever, llm: LLMClient | None = None, mode: str = "B"
             for f in proposed:
                 if f.legalBasis.tier == "none" and f.severity == "high":
                     hits = retriever.search(f"{f.riskType} {f.clauseQuote[:80]}", top_k=3)
-                    for a in hits:
-                        verify_blocks.append(f"[检索] {a.id}|{a.version}|{a.article} {a.text[:300]}")
+                    for a in hits:  # retriever.search 返回 ScoredArticle：条文在 .article 字段
+                        art = a.article
+                        verify_blocks.append(f"[检索] {art.id}|{art.version}|{art.article} {art.text[:300]}")
         user = (
             "候选风险发现：\n" + "\n".join(lines)
             + "\n\n相关条款事实：\n"
@@ -146,7 +161,7 @@ def build_reviewer_node(retriever, llm: LLMClient | None = None, mode: str = "B"
         verdicts: list[dict] = []
         for attempt in range(SCHEMA_MAX_RETRIES + 1):
             try:
-                data = llm.chat_json(
+                data = review_client.chat_json(
                     [
                         {"role": "system", "content": REVIEW_SYSTEM},
                         {"role": "user", "content": user},
@@ -155,6 +170,8 @@ def build_reviewer_node(retriever, llm: LLMClient | None = None, mode: str = "B"
                 raw = data.get("verdicts", []) if isinstance(data, dict) else []
                 verdicts = [v for v in raw if isinstance(v, dict) and v.get("findingId")]
                 break
+            except BalanceError:  # 余额耗尽：冒泡（全局性错误，防放行成空报告）
+                raise
             except (LLMError, json.JSONDecodeError):
                 if attempt < SCHEMA_MAX_RETRIES:
                     continue

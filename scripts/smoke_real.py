@@ -9,20 +9,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.config import using_mock  # noqa: E402
+from app.config import DEMO_CONTRACT_DIR, using_mock  # noqa: E402
 from app.graph import run_pipeline  # noqa: E402
 
 if using_mock():
     print("[error] 未检测到 DEEPSEEK_API_KEY，无法跑真实模式")
     sys.exit(1)
 
-DEMO = Path("eval/dataset/demo")
-
 
 def main() -> None:
     t0 = time.time()
     for name in ("demo_high", "demo_clean", "demo_boundary"):
-        text = (DEMO / f"{name}.txt").read_text(encoding="utf-8")
+        text = (DEMO_CONTRACT_DIR / f"{name}.txt").read_text(encoding="utf-8")
         t1 = time.time()
         report = run_pipeline(text, contract_type="purchase", contract_name=name, review_mode="C")
         dt = time.time() - t1
