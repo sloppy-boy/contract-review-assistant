@@ -68,7 +68,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { store, fetchBalance, FRONT_VERSION } from './api.js'
 import Workbench from './views/Workbench.vue'
@@ -123,6 +123,9 @@ onMounted(() => {
   // 每 5 分钟刷新一次余额（余额可能被其他端消耗）
   setInterval(fetchBalance, 5 * 60 * 1000)
 })
+
+// 记住在线/离线模式选择，刷新后不丢
+watch(() => store.mode, (m) => localStorage.setItem('cra_mode', m))
 </script>
 
 <style scoped>

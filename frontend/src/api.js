@@ -5,7 +5,7 @@ import { reactive } from 'vue'
 export const FRONT_VERSION = '2026-08-17.3'
 
 export const store = reactive({
-  mode: 'online',          // online | offline（演示不依赖 API 可用性）
+  mode: localStorage.getItem('cra_mode') || 'online',  // online | offline（演示不依赖 API 可用性；记忆上次选择）
   report: null,
   contractName: '',
   contractType: 'purchase',
@@ -102,9 +102,13 @@ export async function loadEvalResults() {
 // ================================================================ 设置 / 供应商管理
 // 设置页：读设置（脱敏）→ providers（baseUrl/hasKey/models/价格）+ 模型路由
 export async function fetchSettings() {
-  const resp = await fetch('/api/settings')
-  if (!resp.ok) throw new Error('读取设置失败')
-  return resp.json()
+  try {
+    const resp = await fetch('/api/settings')
+    if (!resp.ok) return null  // 后端未启动时 Vite 代理返回 5xx（非网络错误），同样静默跳过
+    return await resp.json()
+  } catch {
+    return null  // 网络层失败也静默（设置页仅在在线+后端可用时有意义）
+  }
 }
 
 export async function saveSettings(payload) {

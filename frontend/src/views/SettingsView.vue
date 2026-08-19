@@ -121,9 +121,9 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { fetchSettings, saveSettings, fetchProviderModels, testProvider } from '../api.js'
+import { fetchSettings, saveSettings, fetchProviderModels, testProvider, store } from '../api.js'
 
 const providers = reactive({})
 const keys = reactive({})          // 新填的 key（不回显已存密钥）
@@ -246,13 +246,19 @@ function applyServer(data) {
   if (data.common) Object.assign(common, data.common)
 }
 
-onMounted(async () => {
+async function loadSettings() {
+  if (store.mode === 'offline') return  // 离线演示不依赖后端，跳过设置拉取
   try {
-    applyServer(await fetchSettings())
+    const data = await fetchSettings()
+    if (data) applyServer(data)
   } catch (e) {
     ElMessage.error(`读取设置失败：${e.message || e}`)
   }
-})
+}
+
+onMounted(loadSettings)
+// 从离线切回在线时重新加载后端设置
+watch(() => store.mode, (m) => { if (m === 'online') loadSettings() })
 </script>
 
 <style scoped>
