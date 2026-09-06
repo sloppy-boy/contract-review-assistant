@@ -7,6 +7,7 @@ export const FRONT_VERSION = '2026-08-17.3'
 export const store = reactive({
   mode: localStorage.getItem('cra_mode') || 'online',  // online | offline（演示不依赖 API 可用性；记忆上次选择）
   report: null,
+  reviewRunId: null,       // 在线审查的持久化运行 ID；人工裁决与审计事件的锚点
   contractName: '',
   contractType: 'purchase',
   running: false,
@@ -20,7 +21,20 @@ export const store = reactive({
   balanceAvailable: null,  // 账户是否可用（false = 余额耗尽/停止服务）
   balanceThreshold: 5,     // 预警阈值（元，后端下发）
   balanceQueryFailed: false,
+  workspaceApiKey: localStorage.getItem('cra_workspace_api_key') || '',
 })
+
+export function saveWorkspaceApiKey(value) {
+  store.workspaceApiKey = value.trim()
+  if (store.workspaceApiKey) localStorage.setItem('cra_workspace_api_key', store.workspaceApiKey)
+  else localStorage.removeItem('cra_workspace_api_key')
+}
+
+function apiFetch(path, options = {}) {
+  const headers = new Headers(options.headers || {})
+  if (store.workspaceApiKey) headers.set('X-API-Key', store.workspaceApiKey)
+  return fetch(path, { ...options, headers })
+}
 
 export const STAGES = ['条款抽取', '风险识别（13 workers 并行）', '对抗复核', '报告生成']
 
@@ -43,44 +57,91 @@ export async function loadDemoReport(id) {
 const POLL_LIMIT = 600
 const POLL_INTERVAL_MS = 1000
 
-export async function uploadAndReview(text, contractType, onProgress) {
-  const resp = await fetch('/api/upload', {
+async function pollReview(taskId, onProgress) {
+  let consecutiveErrors = 0
+  for (let i = 0; ; i++) {
+    if (i >= POLL_LIMIT) {
+      const error = new Error('审查仍在后端运行，可稍后返回工作台继续查看结果。')
+      error.taskId = taskId
+      throw error
+    }
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+    let rep
+    try {
+      rep = await apiFetch(`/api/report/${taskId}`).then((x) => x.json())
+      consecutiveErrors = 0
+    } catch {
+      if (++consecutiveErrors >= 5) {
+        const error = new Error('与后端连接中断；审查任务已保留，可稍后返回工作台继续查看。')
+        error.taskId = taskId
+        throw error
+      }
+      continue
+    }
+    if (rep.status === 'running' || rep.status === 'queued') {
+      onProgress?.(rep)
+      continue
+    }
+    if (rep.status === 'done') return { report: rep.report, taskId }
+    if (rep.status === 'failed') {
+      const error = new Error(rep.error || '流水线失败')
+      error.balanceExhausted = !!rep.balanceExhausted
+      error.taskId = taskId
+      throw error
+    }
+  }
+}
+
+export async function uploadAndReview(text, contractType, onProgress, onTaskCreated) {
+  const resp = await apiFetch('/api/upload', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ text, contract_type: contractType }),
   })
-  if (!resp.ok) throw new Error('上传失败（后端未启动？）')
-  const { taskId } = await resp.json()
-  let consecutiveErrors = 0
-  for (let i = 0; ; i++) {
-    if (i >= POLL_LIMIT) throw new Error(`流水线处理超过 10 分钟仍未完成（深度模型审查较慢）。任务仍在后端运行，可稍后刷新页面或重新提交。`)
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS))
-    let rep
-    try {
-      rep = await fetch(`/api/report/${taskId}`).then((x) => x.json())
-      consecutiveErrors = 0
-    } catch {
-      // 网络抖动/后端瞬断：不放弃轮询，连续失败 5 次才报错
-      if (++consecutiveErrors >= 5) throw new Error('与后端连接中断（连续 5 次请求失败），请检查服务是否仍在运行')
-      continue
-    }
-    if (rep.status === 'running') {
-      if (onProgress) onProgress(rep)  // 真实进度：stage / stageTimes / stageDetail
-      continue
-    }
-    if (rep.status === 'done') return rep.report
-    if (rep.status === 'failed') {
-      const err = new Error(rep.error || '流水线失败')
-      err.balanceExhausted = !!rep.balanceExhausted  // 余额耗尽 → 弹"停止服务"提示
-      throw err
-    }
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}))
+    if (resp.status === 401) throw new Error('访问密钥无效或未填写，请在工作台填写工作区访问密钥')
+    throw new Error(data.detail || `上传失败（HTTP ${resp.status}）`)
   }
+  const { taskId } = await resp.json()
+  onTaskCreated?.(taskId)
+  return pollReview(taskId, onProgress)
+}
+
+export function resumeReview(taskId, onProgress) {
+  return pollReview(taskId, onProgress)
+}
+
+export async function fetchReviewHistory(status = '') {
+  const query = status ? `?status=${encodeURIComponent(status)}` : ''
+  const resp = await apiFetch(`/api/review-runs${query}`)
+  if (!resp.ok) throw new Error('历史记录读取失败')
+  return (await resp.json()).runs
+}
+
+export async function fetchReviewRun(taskId) {
+  const resp = await apiFetch(`/api/report/${taskId}`)
+  if (!resp.ok) throw new Error('审查记录读取失败')
+  return resp.json()
+}
+
+export async function saveFindingDisposition(taskId, findingId, decision, reason = '') {
+  const resp = await apiFetch(`/api/review-runs/${taskId}/findings/${findingId}/disposition`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision, reason }),
+  })
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}))
+    throw new Error(data.detail || '保存人工裁决失败')
+  }
+  return resp.json()
 }
 
 // 余额探活（后端 /balance 直连 DeepSeek 账户接口；失败不阻塞使用）
 export async function fetchBalance() {
   try {
-    const resp = await fetch('/api/balance')
+    const resp = await apiFetch('/api/balance')
     if (!resp.ok) return
     const data = await resp.json()
     store.balance = data.balance ?? null
@@ -103,7 +164,7 @@ export async function loadEvalResults() {
 // 设置页：读设置（脱敏）→ providers（baseUrl/hasKey/models/价格）+ 模型路由
 export async function fetchSettings() {
   try {
-    const resp = await fetch('/api/settings')
+    const resp = await apiFetch('/api/settings')
     if (!resp.ok) return null  // 后端未启动时 Vite 代理返回 5xx（非网络错误），同样静默跳过
     return await resp.json()
   } catch {
@@ -112,7 +173,7 @@ export async function fetchSettings() {
 }
 
 export async function saveSettings(payload) {
-  const resp = await fetch('/api/settings', {
+  const resp = await apiFetch('/api/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -126,14 +187,14 @@ export async function saveSettings(payload) {
 
 // 拉取某供应商实时模型列表（失败回退本地预置）
 export async function fetchProviderModels(providerId) {
-  const resp = await fetch(`/api/providers/${encodeURIComponent(providerId)}/models`)
+  const resp = await apiFetch(`/api/providers/${encodeURIComponent(providerId)}/models`)
   if (!resp.ok) throw new Error('模型列表获取失败')
   return resp.json()
 }
 
 // 测试供应商连通性（最小 chat 调用）
 export async function testProvider(providerId, model) {
-  const resp = await fetch(`/api/providers/${encodeURIComponent(providerId)}/test`, {
+  const resp = await apiFetch(`/api/providers/${encodeURIComponent(providerId)}/test`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model }),

@@ -1,0 +1,15 @@
+services:
+  contract-review-assistant:
+    build: .
+    env_file:
+      - .env
+    ports: ["8000:8000"]
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      REVIEW_RUNS_PATH: /app/data/review_runs.db
+      CONTRACT_REVIEW_SETTINGS: /app/data/settings.json
+    volumes:
+      - review-data:/app/data
+    restart: unless-stopped
+volumes:
+  review-data:

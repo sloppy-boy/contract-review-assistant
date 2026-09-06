@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 
 from ..config import REVIEW_MODE, using_mock
+from ..legal.corpus_snapshot import LegalCorpusSnapshot
 from ..state import ContractState, ReportOut
 
 _SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2}
@@ -46,6 +47,10 @@ def report_node(state: ContractState, mode: str | None = None) -> dict:
     for f in risks:
         d = f.model_dump()
         d["disputed"] = f.status == "disputed"
+        # 生产工作流：高危与缺少直接法条依据的结论必须由法务确认。
+        d["reviewStatus"] = (
+            "pending_review" if f.severity == "high" or f.legalBasis.tier == "none" else "not_required"
+        )
         risk_cards.append(d)
 
     # 条款导航（含风险级别红/黄/绿）
@@ -86,6 +91,7 @@ def report_node(state: ContractState, mode: str | None = None) -> dict:
             "mock": using_mock(),
             "generatedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
             "latencyMs": int((time.time() - start) * 1000),
+            "legalCorpus": LegalCorpusSnapshot.from_manual().model_dump(),
         },
     )
     return {"report": report.model_dump()}

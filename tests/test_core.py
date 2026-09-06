@@ -10,7 +10,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.api import _sanitize_filename  # noqa: E402
+from app.review_runs import ReviewRunStore  # noqa: E402
 from app.legal.rule_checker import rule_baseline_findings  # noqa: E402
+from app.legal.corpus_snapshot import LegalCorpusSnapshot  # noqa: E402
 from app.llm import BalanceError, LLMError, classify_balance_error  # noqa: E402
 from app.nodes.extract import _llm_extract_chunk, _stable_clause_id, split_into_chunks, _rule_extract  # noqa: E402
 from app.nodes.report import report_node  # noqa: E402
@@ -25,6 +27,127 @@ def mk_finding(id, clause, rtype, sev, evidence="", status="proposed"):
         riskType=rtype, severity=sev, legalBasis=LegalBasis(),
         evidence=evidence, suggestion="suggestion", status=status,
     )
+
+
+# ================================================================ 工业级审查运行记录
+class TestReviewRuns:
+    def test_review_run_survives_store_reopen(self, tmp_path):
+        """任务进度落库后，重新创建 store 仍可恢复查询。"""
+        path = tmp_path / "review_runs.db"
+        store = ReviewRunStore(path)
+        run = store.create_run(contract_type="purchase")
+        store.update_progress(run["id"], stage=1, status="running", detail="13 workers")
+
+        reopened = ReviewRunStore(path)
+        restored = reopened.get_run(run["id"])
+        assert restored["status"] == "running"
+        assert restored["stage"] == 1
+        assert restored["stageDetail"] == "13 workers"
+
+    def test_review_run_records_ordered_events(self, tmp_path):
+        """创建和进度更新均留下顺序事件，供 SSE 断线恢复。"""
+        store = ReviewRunStore(tmp_path / "review_runs.db")
+        run = store.create_run(contract_type="sale")
+        store.update_progress(run["id"], stage=0, status="running", detail="条款抽取")
+
+        events = store.list_events(run["id"])
+        assert [event["type"] for event in events] == ["created", "progress"]
+        assert events[-1]["data"]["stageDetail"] == "条款抽取"
+
+    def test_completed_report_keeps_all_pipeline_stage_times(self, tmp_path):
+        store = ReviewRunStore(tmp_path / "review_runs.db")
+        run = store.create_run(contract_type="sale")
+        store.complete_run(run["id"], {"meta": {}}, elapsed_ms=100, stage_times=[10, 20, 30, 40])
+
+        assert store.get_run(run["id"])["report"]["meta"]["stageTimes"] == [10, 20, 30, 40]
+
+    def test_balance_exhausted_failure_survives_store_reopen(self, tmp_path):
+        path = tmp_path / "review_runs.db"
+        store = ReviewRunStore(path)
+        run = store.create_run(contract_type="purchase")
+        store.fail_run(run["id"], "provider unavailable", balance_exhausted=True)
+
+        restored = ReviewRunStore(path).get_run(run["id"])
+
+        assert restored["balanceExhausted"] is True
+
+    def test_report_endpoint_reads_a_persisted_failed_run(self, monkeypatch, tmp_path):
+        """报告接口读取持久化失败状态，而不是进程内 TASKS 字典。"""
+        from fastapi.testclient import TestClient
+        from app import api as api_mod
+
+        store = ReviewRunStore(tmp_path / "review_runs.db")
+        monkeypatch.setattr(api_mod, "review_run_store", store, raising=False)
+        run = store.create_run(contract_type="purchase")
+        store.fail_run(run["id"], "provider unavailable")
+
+        response = TestClient(api_mod.app).get(f"/report/{run['id']}")
+        assert response.status_code == 200
+        assert response.json()["status"] == "failed"
+        assert response.json()["error"] == "provider unavailable"
+
+    def test_rejected_disposition_requires_reason(self, tmp_path):
+        """法务驳回结论必须说明理由，审计记录不能留下无意义空操作。"""
+        store = ReviewRunStore(tmp_path / "review_runs.db")
+        run = store.create_run(contract_type="purchase")
+        with pytest.raises(ValueError, match="reason"):
+            store.set_disposition(run["id"], "finding-1", "rejected", "")
+
+    def test_disposition_is_persisted_as_an_event(self, tmp_path):
+        store = ReviewRunStore(tmp_path / "review_runs.db")
+        run = store.create_run(contract_type="purchase")
+        store.set_disposition(run["id"], "finding-1", "accepted", "证据充分")
+        assert store.get_dispositions(run["id"])["finding-1"]["decision"] == "accepted"
+
+    def test_disposition_endpoint_writes_auditable_decision(self, monkeypatch, tmp_path):
+        from fastapi.testclient import TestClient
+        from app import api as api_mod
+
+        store = ReviewRunStore(tmp_path / "review_runs.db")
+        monkeypatch.setattr(api_mod, "review_run_store", store, raising=False)
+        run = store.create_run(contract_type="purchase")
+        response = TestClient(api_mod.app).post(
+            f"/review-runs/{run['id']}/findings/finding-1/disposition",
+            json={"decision": "accepted", "reason": "证据充分"},
+        )
+        assert response.status_code == 200
+        assert response.json()["decision"] == "accepted"
+
+    def test_report_endpoint_overlays_human_disposition(self, monkeypatch, tmp_path):
+        from fastapi.testclient import TestClient
+        from app import api as api_mod
+
+        store = ReviewRunStore(tmp_path / "review_runs.db")
+        monkeypatch.setattr(api_mod, "review_run_store", store, raising=False)
+        run = store.create_run(contract_type="purchase")
+        store.complete_run(run["id"], {"risks": [{"id": "finding-1", "reviewStatus": "pending_review"}]}, elapsed_ms=1, stage_times=[1, 0, 0, 0])
+        store.set_disposition(run["id"], "finding-1", "accepted", "证据充分")
+
+        response = TestClient(api_mod.app).get(f"/report/{run['id']}")
+        risk = response.json()["report"]["risks"][0]
+        assert risk["reviewStatus"] == "accepted"
+        assert risk["reviewDecision"]["reason"] == "证据充分"
+        assert response.json()["report"]["meta"]["stageTimes"] == [1, 0, 0, 0]
+
+
+class TestLegalCorpusSnapshot:
+    def test_snapshot_hash_changes_when_legal_text_changes(self):
+        """法条原文变化必须产生新快照，历史报告可据此复现证据版本。"""
+        a = LegalCorpusSnapshot.create([
+            {"id": "CIVIL-585", "version": "v1", "article": "第585条", "text": "原文 A"},
+        ])
+        b = LegalCorpusSnapshot.create([
+            {"id": "CIVIL-585", "version": "v1", "article": "第585条", "text": "原文 B"},
+        ])
+        assert a.contentHash != b.contentHash
+        assert a.articleCount == 1
+
+    def test_high_risk_defaults_to_pending_human_review(self):
+        finding = mk_finding("high-1", "第五条", "单方解除条件失衡", "high", status="upheld")
+        report = report_node({
+            "findings": [finding], "clauses": [], "contract_name": "x", "contract_type": "purchase",
+        }, mode="B")["report"]
+        assert report["risks"][0]["reviewStatus"] == "pending_review"
 
 
 # ================================================================ findings reducer

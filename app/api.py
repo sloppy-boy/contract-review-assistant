@@ -13,12 +13,13 @@ import os
 import re
 import threading
 import time
-import uuid
+import copy
+from pathlib import Path
 from urllib.parse import quote
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from .config import (
@@ -26,28 +27,42 @@ from .config import (
     DEEPSEEK_MODEL,
     DEEPSEEK_REVIEWER_MODEL,
     MAX_UPLOAD_CHARS,
+    REVIEW_RUNS_PATH,
     using_mock,
 )
 from .export_word import report_to_docx
 from .graph import run_pipeline
 from .llm import BalanceError
 from .settings_store import active_llm_config, load_settings, public_settings, save_settings
+from .review_runs import ReviewRunStore
+from .feedback import FeedbackStore
+from .observability import TraceStore
+from .security import ApiKeyAuthenticator, Principal
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="合同审查助手", version="0.1.0")
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
-TASKS: dict[str, dict] = {}  # 进程内任务表（不做数据库）
-_tasks_lock = threading.Lock()  # TASKS 全量读写锁（S2：dict 多线程读写无锁会抛迭代崩溃）
+review_run_store = ReviewRunStore(REVIEW_RUNS_PATH)
+authenticator = ApiKeyAuthenticator.from_environment()
+trace_store = TraceStore(REVIEW_RUNS_PATH.with_name("traces.db"))
+feedback_store = FeedbackStore(REVIEW_RUNS_PATH.with_name("feedback.db"))
 
 # 后端并发限制：同时最多运行 N 条流水线（防多用户并发打爆 LLM API 限流）
 PIPELINE_MAX_CONCURRENT = int(os.environ.get("PIPELINE_MAX_CONCURRENT", "2"))
 _pipeline_semaphore = threading.Semaphore(PIPELINE_MAX_CONCURRENT)
-# 任务表内存上限：清理最旧的已完成任务，防无限增长
-TASKS_MAX = int(os.environ.get("TASKS_MAX", "200"))
 
 # 文件名消毒（S1）：HTTP 头禁止控制字符/引号/反斜杠（防头注入）；换行/CR 亦属控制字符
 _FILENAME_UNSAFE_RE = re.compile(r'[\x00-\x1f\x7f"\\/:*?<>|]')
+
+
+@app.middleware("http")
+async def production_api_prefix(request: Request, call_next):
+    """开发期由 Vite 代理去掉 /api；生产单容器复用同一公开路径。"""
+    if request.scope["path"].startswith("/api/"):
+        request.scope["path"] = request.scope["path"][4:]
+    return await call_next(request)
 
 
 def _sanitize_filename(name: str, fallback: str = "contract-review-report") -> str:
@@ -56,17 +71,37 @@ def _sanitize_filename(name: str, fallback: str = "contract-review-report") -> s
     return cleaned[:60] or fallback
 
 
-def _trim_tasks() -> None:
-    """超过上限时清理最旧的 done/failed 任务（running 保留）。调用方须持 _tasks_lock。"""
-    if len(TASKS) <= TASKS_MAX:
-        return
-    finished = [k for k, v in TASKS.items() if v["status"] in ("done", "failed")]
-    for k in sorted(finished, key=lambda k: TASKS[k].get("startedAt", 0))[: len(TASKS) - TASKS_MAX]:
-        TASKS.pop(k, None)
-
-
 class ExportWordReq(BaseModel):
     report: dict
+
+
+class FindingDispositionReq(BaseModel):
+    decision: str
+    reason: str = ""
+
+
+class FeedbackReq(BaseModel):
+    decision: str
+    reason: str = ""
+
+
+def current_principal(x_api_key: str | None = Header(default=None)) -> Principal:
+    try:
+        return authenticator.authenticate(x_api_key)
+    except PermissionError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+
+@app.get("/platform/metrics")
+def platform_metrics(principal: Principal = Depends(current_principal)) -> dict:
+    ApiKeyAuthenticator.require_role(principal, "admin", "legal_reviewer")
+    return trace_store.summary(principal.tenant_id)
+
+
+@app.get("/platform/feedback/export")
+def export_feedback(principal: Principal = Depends(current_principal)) -> dict:
+    ApiKeyAuthenticator.require_role(principal, "admin", "legal_reviewer")
+    return {"examples": feedback_store.export_training_examples(principal.tenant_id)}
 
 
 @app.post("/export/word")
@@ -258,8 +293,14 @@ async def upload(
     file: UploadFile | None = None,
     text: str | None = Form(default=None),
     contract_type: str = Form(default="purchase"),
+    principal: Principal = Depends(current_principal),
 ) -> dict:
     """上传合同（文件或文本）→ 返回 taskId（异步跑流水线）。"""
+    if active_llm_config("main") is None:
+        raise HTTPException(
+            status_code=503,
+            detail="审查模型尚未配置。请先在设置页配置并测试可用的主审查模型；离线演示可继续使用。",
+        )
     if file is not None:
         content = (await file.read()).decode("utf-8", errors="ignore")
     elif text:
@@ -273,17 +314,8 @@ async def upload(
             status_code=413,
             detail=f"合同内容过长（{len(content)} 字符，上限 {MAX_UPLOAD_CHARS}），请拆分后上传",
         )
-    task_id = uuid.uuid4().hex
-    with _tasks_lock:
-        TASKS[task_id] = {
-            "status": "running",
-            "startedAt": time.time(),
-            "stage": 0,
-            "stageStatus": "idle",          # idle → running（进入阶段）→ done（阶段完成）
-            "stageTimes": [0, 0, 0, 0],     # 各阶段耗时 ms（与 STAGES 一一对应）
-            "stageDetail": "",
-        }
-        _trim_tasks()  # 防任务表无限增长
+    task = review_run_store.create_run(contract_type=contract_type, tenant_id=principal.tenant_id)
+    task_id = task["id"]
     threading.Thread(target=_run, args=(task_id, content, contract_type), daemon=True).start()
     return {"taskId": task_id, "status": "running"}
 
@@ -291,47 +323,78 @@ async def upload(
 @app.get("/report/{task_id}")
 def report(task_id: str) -> dict:
     """轮询任务结果（报告 JSON）。"""
-    with _tasks_lock:
-        task = TASKS.get(task_id)
+    task = review_run_store.get_run(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
+
+    # 人工裁决属于审查运行的附加事实，读取时叠加到原始报告，避免改写
+    # LLM 产出的可追溯证据和报告快照。
+    if task.get("report"):
+        task = copy.deepcopy(task)
+        task["report"].setdefault("meta", {}).setdefault("stageTimes", task.get("stageTimes", [0, 0, 0, 0]))
+        dispositions = review_run_store.get_dispositions(task_id)
+        for risk in task["report"].get("risks", []):
+            disposition = dispositions.get(risk.get("id"))
+            if disposition:
+                risk["reviewStatus"] = disposition["decision"]
+                risk["reviewDecision"] = disposition
     return task
+
+
+@app.get("/review-runs/{task_id}/events")
+def review_run_events(task_id: str, after_id: int = 0) -> dict:
+    if review_run_store.get_run(task_id) is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return {"events": review_run_store.list_events(task_id, after_id=after_id)}
+
+
+@app.get("/review-runs")
+def review_history(
+    status: str | None = None,
+    limit: int = 100,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    """审查历史列表；严格按当前租户隔离。"""
+    return {"runs": review_run_store.list_runs(tenant_id=principal.tenant_id, status=status, limit=limit)}
+
+
+@app.post("/review-runs/{task_id}/findings/{finding_id}/disposition")
+def set_finding_disposition(task_id: str, finding_id: str, req: FindingDispositionReq) -> dict:
+    try:
+        return review_run_store.set_disposition(task_id, finding_id, req.decision, req.reason)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="task not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/review-runs/{task_id}/findings/{finding_id}/feedback")
+def record_feedback(task_id: str, finding_id: str, req: FeedbackReq, principal: Principal = Depends(current_principal)) -> dict:
+    ApiKeyAuthenticator.require_role(principal, "admin", "legal_reviewer")
+    feedback_store.record(tenant_id=principal.tenant_id, run_id=task_id, finding_id=finding_id, decision=req.decision, reason=req.reason)
+    return {"ok": True}
 
 
 def _run(task_id: str, content: str, contract_type: str) -> None:
     with _pipeline_semaphore:  # 排队执行（超出并发上限的任务等待，不拒绝）
         try:
             start = time.time()
-            start_ms = time.time() * 1000
+            stage_starts: dict[int, float] = {}
 
             def _progress(stage: int, status: str, detail: str = "") -> None:
-                """流水线真实进度 → TASKS（前端轮询渲染：阶段 + 各阶段耗时）。"""
+                """流水线真实进度 → 持久化 ReviewRun。"""
                 now_ms = time.time() * 1000
-                with _tasks_lock:
-                    t = TASKS.get(task_id)
-                    if t is None or t.get("status") != "running":
-                        return
-                    if status == "running":
-                        # 进入新阶段（或同阶段继续）→ 记录开始时间；同阶段 worker 计数更新 detail
-                        if t.get("stage") != stage or t.get("stageStatus") != "running":
-                            t["stage"] = stage
-                            t["stageStatus"] = "running"
-                            t["stageStartedAt"] = now_ms
-                        t["stageDetail"] = detail
-                    else:  # done：结算该阶段耗时（秒回阶段保底展示 1.5s，前端轮询才可见）
-                        started = t.get("stageStartedAt") or now_ms
-                        times = t.setdefault("stageTimes", [0, 0, 0, 0])
-                        elapsed = int(now_ms - started)
-                        if elapsed < 1500 and stage > 0:
-                            # 0 findings 等场景复核/报告生成秒回：补齐展示窗口，
-                            # 否则前端 1s 轮询采样不到该阶段（UI 显示"跳变"）
-                            time.sleep((1500 - elapsed) / 1000)
-                            now_ms = time.time() * 1000
-                            elapsed = int(now_ms - started)
-                        times[stage] = elapsed
-                        t["stage"] = stage
-                        t["stageStatus"] = "done"
-                        t["stageDetail"] = detail
+                current = review_run_store.get_run(task_id)
+                if current is None or current.get("status") not in {"queued", "running"}:
+                    return
+                times = current["stageTimes"]
+                if status == "running":
+                    stage_starts.setdefault(stage, now_ms)
+                    review_run_store.update_progress(task_id, stage=stage, status="running", detail=detail, stage_times=times)
+                else:
+                    started = stage_starts.get(stage, now_ms)
+                    times[stage] = int(now_ms - started)
+                    review_run_store.update_progress(task_id, stage=stage, status="done", detail=detail, stage_times=times)
 
             r = run_pipeline(
                 content,
@@ -339,24 +402,25 @@ def _run(task_id: str, content: str, contract_type: str) -> None:
                 contract_name=task_id,
                 progress=_progress,
             )
-            with _tasks_lock:
-                TASKS[task_id] = {
-                    "status": "done",
-                    "report": r,
-                    "elapsedMs": int((time.time() - start) * 1000),
-                    "stage": 3,
-                    "stageStatus": "done",
-                    "stageTimes": TASKS.get(task_id, {}).get("stageTimes", [0, 0, 0, 0]),
-                }
+            current = review_run_store.get_run(task_id) or {}
+            review_run_store.complete_run(
+                task_id, r, elapsed_ms=int((time.time() - start) * 1000), stage_times=current.get("stageTimes", [0, 0, 0, 0])
+            )
         except BalanceError as e:  # 余额耗尽：显式标记，前端弹"停止服务"提示（不出现空报告跳转）
             logger.error("任务 %s 因 API 余额不足失败", task_id)
-            with _tasks_lock:
-                TASKS[task_id] = {
-                    "status": "failed",
-                    "error": f"API 供应商停止服务：{e}",
-                    "balanceExhausted": True,
-                }
+            review_run_store.fail_run(task_id, f"API 供应商停止服务：{e}", balance_exhausted=True)
         except Exception as e:  # 部分成功原则：单任务失败不崩服务
             logger.exception("流水线任务 %s 失败", task_id)
-            with _tasks_lock:
-                TASKS[task_id] = {"status": "failed", "error": str(e)}
+            review_run_store.fail_run(task_id, str(e))
+
+
+@app.get("/{spa_path:path}", include_in_schema=False)
+def frontend(spa_path: str) -> Response:
+    """生产环境单容器托管 Vue 构建产物，并支持前端路由刷新。"""
+    index = FRONTEND_DIST / "index.html"
+    if not index.exists():
+        raise HTTPException(status_code=503, detail="前端构建产物不存在，请先执行 npm run build")
+    candidate = FRONTEND_DIST / spa_path
+    if spa_path and candidate.is_file() and candidate.resolve().is_relative_to(FRONTEND_DIST.resolve()):
+        return FileResponse(candidate)
+    return FileResponse(index)

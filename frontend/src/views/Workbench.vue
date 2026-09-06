@@ -12,10 +12,10 @@
           class="uploader"
           @change="onFile"
         >
-          <div class="upload-icon">📄</div>
+          <div class="upload-icon"></div>
           <div class="upload-hint">拖拽合同文件到此处，或点击选择</div>
           <div class="upload-sub">支持 .txt / .md 文本 · 合同数据不落第三方存储</div>
-          <div v-if="fileName" class="file-picked">✅ 已读取：<b>{{ fileName }}</b>（{{ text.length }} 字）</div>
+          <div v-if="fileName" class="file-picked"> 已读取：<b>{{ fileName }}</b>（{{ text.length }} 字）</div>
         </el-upload>
         <!-- 粘贴输入（P1：规范承诺"拖拽上传或复制文本粘贴"，补真实入口） -->
         <el-input
@@ -27,6 +27,16 @@
           placeholder="或直接粘贴合同文本（纯文本，支持中文）…"
           :disabled="store.running"
         />
+        <el-input
+          v-if="store.mode === 'online'"
+          v-model="workspaceApiKey"
+          type="password"
+          show-password
+          clearable
+          class="workspace-key"
+          placeholder="工作区访问密钥（生产环境必填）"
+          @input="persistWorkspaceApiKey"
+        />
         <!-- 设置行：类型 + 开始 -->
         <div class="setting-row">
           <el-radio-group v-model="store.contractType" size="default">
@@ -34,16 +44,16 @@
             <el-radio-button value="sale">销售合同</el-radio-button>
           </el-radio-group>
           <el-button type="primary" class="start-btn" :loading="store.running" @click="reviewText">
-            🚀 开始审查
+             开始审查
           </el-button>
         </div>
         <div class="pipe-desc">
-          流水线：条款抽取 → 13 类 worker 并行扇出 → 对抗复核（打回重证）→ 报告
+          条款抽取 → 风险识别 → 证据复核 → 审查报告
         </div>
       </div>
 
       <div class="panel demo-panel">
-        <div class="panel-title">🎬 演出合同一键载入<span class="nav-count">离线可用</span></div>
+        <div class="panel-title"> 示例合同一键载入<span class="nav-count">离线可用</span></div>
         <div class="demo-grid">
           <div
             v-for="d in DEMO_CARDS" :key="d.id"
@@ -82,13 +92,16 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { store, DEMO_CONTRACTS, STAGES, loadDemoReport, uploadAndReview } from '../api.js'
+import { store, DEMO_CONTRACTS, STAGES, loadDemoReport, resumeReview, saveWorkspaceApiKey, uploadAndReview } from '../api.js'
 
 const emit = defineEmits(['open-report'])
 const error = ref('')
 const fileName = ref('')
 const text = ref('')
+const workspaceApiKey = ref(store.workspaceApiKey)
+const persistWorkspaceApiKey = () => saveWorkspaceApiKey(workspaceApiKey.value)
 const pasteText = ref('')
+const ACTIVE_RUN_KEY = 'cra_active_review_run'
 
 const DEMO_CARDS = [
   { ...DEMO_CONTRACTS[0], tone: 'high', tag: '召回演示' },
@@ -170,6 +183,10 @@ function onDrop(e) {
 onMounted(() => {
   document.addEventListener('dragover', onDragOver)
   document.addEventListener('drop', onDrop)
+  const saved = localStorage.getItem(ACTIVE_RUN_KEY)
+  if (saved && store.mode === 'online') {
+    try { resumePersistedReview(JSON.parse(saved)) } catch { localStorage.removeItem(ACTIVE_RUN_KEY) }
+  }
 })
 onUnmounted(() => {
   document.removeEventListener('dragover', onDragOver)
@@ -179,7 +196,7 @@ onUnmounted(() => {
 async function reviewText() {
   const content = text.value.trim() || pasteText.value.trim()
   if (!content) { ElMessage.warning('请先上传或粘贴合同文本'); return }
-  if (store.mode === 'offline') { ElMessage.info('离线演示模式请使用右侧演出合同一键载入'); return }
+  if (store.mode === 'offline') { ElMessage.info('离线演示模式请使用右侧示例合同一键载入'); return }
 
   // ── 余额检查（在线模式）：耗尽 → 弹"停止服务"并阻止；低余额 → 预警确认 ──
   if (store.balance !== null && store.balanceAvailable !== null) {
@@ -212,24 +229,11 @@ async function reviewText() {
   error.value = ''
   try {
     // onProgress：后端真实进度（stage/stageTimes/stageDetail）→ 渲染与报告产出同步
-    const report = await uploadAndReview(content, store.contractType, (rep) => {
-      if (typeof rep.stage === 'number') {
-        store.stage = rep.stage
-        store.stageStatus = rep.stageStatus || 'running'
-        store.stageTimes = rep.stageTimes || [0, 0, 0, 0]
-        store.stageDetail = rep.stageDetail || ''
-        // 计时基准：仅当后端给出 stageStartedAt 时覆盖；否则保持首次设置
-        // （后端 idle 阶段没有该字段时若每次重置 → 计时从 0 乱跳）
-        if (rep.stageStartedAt) store.stageStartedAt = rep.stageStartedAt
-        else if (!store.stageStartedAt) store.stageStartedAt = Date.now()
-      }
+    const contractName = fileName.value || (pasteText.value.trim() ? '粘贴合同' : '上传合同')
+    const result = await uploadAndReview(content, store.contractType, applyProgress, (taskId) => {
+      localStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify({ taskId, contractName }))
     })
-    store.report = report
-    store.contractName = fileName.value || (pasteText.value.trim() ? '粘贴合同' : '上传合同')
-    store.stage = STAGES.length - 1
-    store.stageStatus = 'done'
-    ElMessage.success('审查完成，已跳转报告')
-    emit('open-report')
+    finishReview(result, contractName)
   } catch (e) {
     // 余额耗尽：任务失败携带 balanceExhausted → 弹"停止服务"提示（不再莫名跳空报告）
     if (e.balanceExhausted) {
@@ -247,6 +251,41 @@ async function reviewText() {
   }
 }
 
+function applyProgress(rep) {
+  if (typeof rep.stage !== 'number') return
+  store.stage = rep.stage
+  store.stageStatus = rep.stageStatus || 'running'
+  store.stageTimes = rep.stageTimes || [0, 0, 0, 0]
+  store.stageDetail = rep.stageDetail || ''
+  if (rep.stageStartedAt) store.stageStartedAt = rep.stageStartedAt
+  else if (!store.stageStartedAt) store.stageStartedAt = Date.now()
+}
+
+function finishReview(result, contractName) {
+  localStorage.removeItem(ACTIVE_RUN_KEY)
+  store.report = result.report
+  store.reviewRunId = result.taskId
+  store.contractName = contractName
+  store.stage = STAGES.length - 1
+  store.stageStatus = 'done'
+  ElMessage.success('审查完成，已跳转报告')
+  emit('open-report')
+}
+
+async function resumePersistedReview(saved) {
+  if (!saved?.taskId || store.running) return
+  store.running = true
+  store.stageStartedAt = Date.now()
+  error.value = ''
+  try {
+    finishReview(await resumeReview(saved.taskId, applyProgress), saved.contractName || '恢复的合同')
+  } catch (e) {
+    error.value = e.message || '审查恢复失败'
+  } finally {
+    store.running = false
+  }
+}
+
 async function loadDemo(id) {
   store.running = true
   store.stage = 0
@@ -257,6 +296,7 @@ async function loadDemo(id) {
   try {
     const report = await loadDemoReport(id)
     store.report = report
+    store.reviewRunId = null
     store.contractName = id
     store.stage = STAGES.length - 1
     ElMessage.success(`已载入 ${id}（真实 pipeline 缓存）`)

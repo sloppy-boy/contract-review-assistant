@@ -3,10 +3,10 @@
     <!-- 品牌头部 -->
     <header class="header">
       <div class="brand">
-        <div class="logo">📑</div>
+        <div class="logo" aria-hidden="true">审</div>
         <div>
           <div class="brand-title">合同审查助手</div>
-          <div class="brand-sub">多 Agent 协同 · 法条可溯源 · 真实评测</div>
+          <div class="brand-sub">合同风险与证据工作台</div>
         </div>
       </div>
       <div class="header-right">
@@ -15,8 +15,8 @@
         </el-tag>
         <div class="mode-switch">
           <el-radio-group v-model="store.mode" size="small">
-            <el-radio-button value="online">🖥 在线模式</el-radio-button>
-            <el-radio-button value="offline">📦 离线演示</el-radio-button>
+            <el-radio-button value="online">在线审查</el-radio-button>
+            <el-radio-button value="offline">离线演示</el-radio-button>
           </el-radio-group>
         </div>
       </div>
@@ -38,30 +38,41 @@
 
     <!-- 主导航 -->
     <nav class="nav">
-      <div
+      <button
         v-for="t in tabs" :key="t.key"
         class="nav-item" :class="{ active: activeTab === t.key }"
         @click="activeTab = t.key"
+        :aria-current="activeTab === t.key ? 'page' : undefined"
       >
-        <span class="nav-icon">{{ t.icon }}</span>{{ t.label }}
-      </div>
+        {{ t.label }}
+      </button>
     </nav>
 
     <!-- 内容区 -->
     <main class="main">
+      <div class="page-heading">
+        <div><p class="page-kicker">合同审查助手</p><h1>{{ tabs.find(t => t.key === activeTab)?.label }}</h1></div>
+        <span class="page-context">{{ store.report ? '当前合同：' + store.contractName : '采购与销售合同 · 风险初筛' }}</span>
+      </div>
       <Workbench v-show="activeTab === 'workbench'" @open-report="openReport" />
       <template v-if="activeTab === 'report'">
-        <ReportDetail v-if="store.report" :report="store.report" />
+        <ReportDetail
+          v-if="store.report"
+          :report="store.report"
+          :review-run-id="store.reviewRunId"
+          @review-updated="applyReviewUpdate"
+        />
         <div v-else class="panel empty-panel">
           <el-empty description="暂无报告，请先在工作台审查一份合同（可一键载入演出合同）" />
         </div>
       </template>
+      <HistoryView v-show="activeTab === 'history'" @open-run="openHistoryRun" />
       <EvalBoard v-show="activeTab === 'eval'" />
       <SettingsView v-show="activeTab === 'settings'" />
     </main>
 
     <footer class="footer">
-      初筛助手 · 输出需人工终审 · 不构成法律意见 · 评测数字均真实跑出于 held-out test
+      审查结果仅供初筛参考，需人工终审，不构成法律意见。
       <span class="ver-tag">v{{ frontVersion }}</span>
     </footer>
   </div>
@@ -70,21 +81,31 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { store, fetchBalance, FRONT_VERSION } from './api.js'
+import { store, fetchBalance, fetchReviewRun, FRONT_VERSION } from './api.js'
 import Workbench from './views/Workbench.vue'
 import ReportDetail from './views/ReportDetail.vue'
 import EvalBoard from './views/EvalBoard.vue'
 import SettingsView from './views/SettingsView.vue'
+import HistoryView from './views/HistoryView.vue'
 
 const tabs = [
   { key: 'workbench', label: '工作台', icon: '🛠' },
   { key: 'report', label: '报告详情', icon: '📋' },
+  { key: 'history', label: '历史记录', icon: '◷' },
   { key: 'eval', label: '评测对比', icon: '📊' },
   { key: 'settings', label: '设置', icon: '⚙️' },
 ]
 const activeTab = ref('workbench')
 const openReport = () => { activeTab.value = 'report' }
 const frontVersion = FRONT_VERSION
+
+async function openHistoryRun(run) {
+  const task = await fetchReviewRun(run.id)
+  store.reviewRunId = task.id
+  store.contractName = task.report?.contract?.name || `${run.contract_type === 'sale' ? '销售' : '采购'}合同`
+  store.report = task.report || null
+  activeTab.value = task.report ? 'report' : 'workbench'
+}
 
 // ── 余额预警横幅 ─────────────────────────────────────────────
 const balanceBanner = computed(() => {
@@ -116,6 +137,13 @@ async function refreshBalance() {
   if (store.balance !== null && store.balance > 0) {
     ElMessage.success(`余额检测完成：¥${store.balance.toFixed(2)}`)
   }
+}
+
+function applyReviewUpdate({ findingId, disposition }) {
+  const risk = store.report?.risks?.find((item) => item.id === findingId)
+  if (!risk) return
+  risk.reviewStatus = disposition.decision
+  risk.reviewDecision = disposition
 }
 
 onMounted(() => {

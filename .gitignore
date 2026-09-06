@@ -15,6 +15,10 @@ settings.json
 # 运行时产物（评测报告输出、嵌入缓存）
 eval/output/
 .cache/
+data/review_runs.db
+data/review_runs.db-*
+data/feedback.db
+data/traces.db
 
 # 前端
 node_modules/

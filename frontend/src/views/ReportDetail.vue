@@ -4,15 +4,15 @@
     <div class="overview">
       <div class="stat-card" :class="'sev-high'">
         <div class="stat-num" style="color: var(--sev-high)">{{ s.high }}</div>
-        <div class="stat-lbl">🔴 高危</div>
+        <div class="stat-lbl"> 高危</div>
       </div>
       <div class="stat-card" :class="'sev-medium'">
         <div class="stat-num" style="color: var(--sev-medium)">{{ s.medium }}</div>
-        <div class="stat-lbl">🟡 中危</div>
+        <div class="stat-lbl"> 中危</div>
       </div>
       <div class="stat-card" :class="'sev-low'">
         <div class="stat-num" style="color: var(--sev-low)">{{ s.low }}</div>
-        <div class="stat-lbl">🟢 低危</div>
+        <div class="stat-lbl"> 低危</div>
       </div>
       <div class="stat-card">
         <div class="stat-num">{{ s.total }}</div>
@@ -42,10 +42,19 @@
       </div>
       <div class="export-card">
         <div class="stat-lbl" style="margin-bottom: 8px">导出报告</div>
-        <el-button type="primary" plain size="small" @click="exportJson">⬇ JSON</el-button>
-        <el-button plain size="small" @click="exportWord">⬇ Word</el-button>
-        <div v-if="report.meta?.mock" class="mock-tag">mock 演示数据</div>
-        <div v-else class="real-tag">真实 pipeline 输出</div>
+        <el-button type="primary" plain size="small" @click="exportJson"> JSON</el-button>
+        <el-button plain size="small" @click="exportWord"> Word</el-button>
+        <div v-if="report.meta?.mock" class="mock-tag">模拟演示数据</div>
+        <div v-else class="real-tag">已完成模型审查</div>
+      </div>
+    </div>
+
+    <div v-if="pipelineTimes.length" class="panel pipeline-times">
+      <div class="panel-title">审查链路耗时 <span class="nav-count">真实运行记录</span></div>
+      <div class="pipeline-time-grid">
+        <div v-for="item in pipelineTimes" :key="item.name" class="pipeline-time-item">
+          <span>{{ item.name }}</span><b>{{ item.label }}</b>
+        </div>
       </div>
     </div>
 
@@ -99,6 +108,9 @@
               <el-tag :type="tagType(r.severity)" size="small" effect="dark">{{ sevName(r.severity) }}</el-tag>
               <b class="rt">{{ r.riskType }}</b>
               <el-tag v-if="r.disputed" type="warning" size="small" effect="plain">有争议</el-tag>
+              <el-tag v-if="r.reviewStatus" :type="reviewTagType(r.reviewStatus)" size="small" effect="plain">
+                {{ reviewStatusName(r.reviewStatus) }}
+              </el-tag>
               <span class="rcid">条款 {{ r.clauseId }}</span>
               <span class="rworker">{{ workerName(r.worker) }}</span>
             </div>
@@ -126,6 +138,17 @@
                 <div v-if="r.status === 'disputed'" class="basis disputed-note">
                   ⚠️ 复核驳回后 worker 坚持：{{ r.reVerifyJustification }}
                 </div>
+                <div v-if="reviewRunId && r.reviewStatus === 'pending_review'" class="human-review-actions">
+                  <span>人工复核：</span>
+                  <el-button size="small" type="success" plain @click.stop="reviewFinding(r, 'accepted')">采纳</el-button>
+                  <el-button size="small" type="warning" plain @click.stop="reviewFinding(r, 'accepted_with_changes')">修改后采纳</el-button>
+                  <el-button size="small" type="danger" plain @click.stop="reviewFinding(r, 'rejected')">驳回</el-button>
+                  <el-button size="small" plain @click.stop="reviewFinding(r, 'escalated')">升级会审</el-button>
+                </div>
+                <div v-else-if="r.reviewDecision" class="basis review-decision">
+                  <b>人工裁决：</b>{{ reviewStatusName(r.reviewDecision.decision) }}
+                  <span v-if="r.reviewDecision.reason"> · {{ r.reviewDecision.reason }}</span>
+                </div>
               </el-collapse-item>
             </el-collapse>
           </div>
@@ -137,9 +160,14 @@
 
 <script setup>
 import { computed, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { saveFindingDisposition } from '../api.js'
 
-const props = defineProps({ report: { type: Object, required: true } })
+const props = defineProps({
+  report: { type: Object, required: true },
+  reviewRunId: { type: String, default: null },
+})
+const emit = defineEmits(['review-updated'])
 const s = computed(() => props.report.summary || { high: 0, medium: 0, low: 0, total: 0 })
 const activeClause = ref('')
 const query = ref('')
@@ -149,7 +177,37 @@ const sevName = (sev) => ({ high: '高危', medium: '中危', low: '低危' }[se
 const basisType = (t) => ({ direct: 'success', indirect: 'warning', none: 'info' }[t] || 'info')
 const basisName = (t) => ({ direct: '直接依据', indirect: '间接依据', none: '无直接依据' }[t] || t)
 const workerName = (w) => (w ? `· ${w.replace('_', ' ')}` : '')
+const reviewStatusName = (status) => ({
+  pending_review: '待人工复核', accepted: '已采纳', accepted_with_changes: '修改后采纳',
+  rejected: '已驳回', escalated: '升级会审', not_required: '无需复核',
+}[status] || status)
+const reviewTagType = (status) => ({
+  pending_review: 'warning', accepted: 'success', accepted_with_changes: 'success',
+  rejected: 'danger', escalated: 'info', not_required: 'info',
+}[status] || 'info')
 const hasDisputed = computed(() => props.report.risks.some((r) => r.disputed))
+const pipelineTimes = computed(() => {
+  const values = props.report.meta?.stageTimes
+  if (!Array.isArray(values) || values.length !== 4) return []
+  const names = ['条款抽取', '风险识别', '对抗复核', '报告生成']
+  return names.map((name, index) => ({ name, label: values[index] >= 1000 ? `${(values[index] / 1000).toFixed(1)} 秒` : '<1 秒' }))
+})
+
+async function reviewFinding(risk, decision) {
+  const requiresReason = ['accepted_with_changes', 'rejected', 'escalated'].includes(decision)
+  try {
+    const { value = '' } = await ElMessageBox.prompt(
+      requiresReason ? '请填写裁决理由（必填，将写入审计记录）。' : '可补充采纳理由（将写入审计记录）。',
+      `确认${reviewStatusName(decision)}`,
+      { inputPlaceholder: requiresReason ? '例如：与业务口径不符，需保留原条款' : '可选', inputValidator: (value) => !requiresReason || value.trim() || '请填写裁决理由' },
+    )
+    const disposition = await saveFindingDisposition(props.reviewRunId, risk.id, decision, value)
+    emit('review-updated', { findingId: risk.id, disposition })
+    ElMessage.success('人工裁决已记录')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error(error.message || '保存人工裁决失败')
+  }
+}
 
 // 按类目风险分布（填满空白区，可视化多 worker 扇出产出）
 const CAT_NAMES = {
@@ -286,6 +344,10 @@ async function exportWord() {
 
 /* 风险分布（按类目） */
 .dist-panel { margin-top: 0; }
+.pipeline-times { margin-top: 0; }
+.pipeline-time-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.pipeline-time-item { display: flex; justify-content: space-between; gap: 8px; padding: 10px 12px; border: 1px solid var(--line); background: var(--paper, #fff); font-size: 13px; color: var(--ink-2); }
+.pipeline-time-item b { color: var(--ink); white-space: nowrap; }
 .dist-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 8px 24px; }
 .dist-item { display: flex; align-items: center; gap: 8px; }
 .dist-name { width: 90px; font-size: 12px; color: var(--ink-2); text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

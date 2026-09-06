@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+REVIEW_RUNS_PATH = Path(os.environ.get("REVIEW_RUNS_PATH", ROOT / "data" / "review_runs.db"))
 
 
 def _load_dotenv(path: Path | None = None) -> None:
@@ -101,14 +102,20 @@ MANUAL_AUDIT_RATIO = 0.2
 
 
 def using_mock() -> bool:
-    """无 key 时返回 True：系统进入规则降级 mock 模式（仅链路自检，数字无效）。
+    """主审查模型不可用时返回 True：系统进入规则降级 mock 模式（仅链路自检，数字无效）。
     DSH_FORCE_MOCK=1 可强制 mock（smoke_test 链路自检用，防误烧真实 token）。
 
-    注意：主链路 key 可能来自 settings.json 的任意供应商（settings_store.active_llm_config），
-    因此 graph.run_pipeline 以"主供应商是否配齐 key + DSH_FORCE_MOCK"为准；
-    此处保留 env 口径（无 DEEPSEEK_API_KEY 且未强制）供无需 LLM 的环节使用。
+    主链路 key 可以来自 settings.json 的任意供应商，不能只检查 DeepSeek 环境变量；
+    否则已配置的 OpenCode 等供应商会被错误标成 mock。
     """
-    return (not DEEPSEEK_API_KEY) or os.environ.get("DSH_FORCE_MOCK", "") == "1"
+    if os.environ.get("DSH_FORCE_MOCK", "") == "1":
+        return True
+    try:
+        from .settings_store import active_llm_config
+
+        return active_llm_config("main") is None
+    except Exception:
+        return not DEEPSEEK_API_KEY
 
 
 def apply_common_settings() -> None:
