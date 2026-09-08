@@ -22,6 +22,7 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict
 
@@ -58,6 +59,15 @@ logger = logging.getLogger(__name__)
 _REAL_THREAD = threading.Thread
 
 app = FastAPI(title="合同审查助手", version="0.1.0")
+_cors_origins = [origin.strip() for origin in os.environ.get("CORS_ORIGINS", "").split(",") if origin.strip()]
+if _cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 review_run_store = ReviewRunStore(REVIEW_RUNS_PATH)

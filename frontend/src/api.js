@@ -1,6 +1,8 @@
 // 全局状态 + 在线/离线 API 封装（SPEC 2.8：离线演示模式，缓存为真实导出）
 import { reactive } from 'vue'
 
+const API_BASE_URL = (import.meta.env?.VITE_API_BASE_URL || globalThis.__CRA_API_BASE_URL || '').replace(/\/$/, '')
+
 // 前端版本标识（排查"页面是否最新"用：footer 显示，与后端 /health 对照）
 export const FRONT_VERSION = '2026-08-17.3'
 
@@ -34,7 +36,8 @@ export function saveWorkspaceApiKey(value) {
 export function apiFetch(path, options = {}) {
   const headers = new Headers(options.headers || {})
   if (store.workspaceApiKey) headers.set('X-API-Key', store.workspaceApiKey)
-  return fetch(path, { ...options, headers })
+  const url = path.startsWith('http') ? path : `${API_BASE_URL}${path}`
+  return fetch(url, { ...options, headers })
 }
 
 export const STAGES = ['条款抽取', '风险识别（13 workers 并行）', '对抗复核', '报告生成']
