@@ -117,13 +117,40 @@
         </el-form-item>
       </el-form>
     </div>
+
+    <div class="panel queue-panel">
+      <div class="panel-title">🧰 任务队列运维 <span class="panel-sub">仅展示控制面元数据；死信可重试，运行中任务可取消</span></div>
+      <div class="queue-toolbar"><el-select v-model="queueFilter" clearable placeholder="全部状态" @change="loadQueue"><el-option label="排队中" value="queued" /><el-option label="运行中" value="running" /><el-option label="重试等待" value="retry_wait" /><el-option label="成功" value="succeeded" /><el-option label="死信" value="dead" /><el-option label="已取消" value="cancelled" /></el-select><el-button :loading="queueLoading" @click="loadQueue">刷新</el-button><el-button :loading="queueLoading" @click="requeueStale">回收失联任务</el-button></div>
+      <el-alert v-if="queueError" :title="queueError" type="warning" :closable="false" />
+      <div v-if="!queueTasks.length" class="queue-empty">暂无任务或当前身份没有运维权限。</div>
+      <table v-else class="queue-table"><thead><tr><th>任务</th><th>类型</th><th>状态</th><th>尝试</th><th>最后错误</th><th>操作</th></tr></thead><tbody><tr v-for="task in queueTasks" :key="task.id"><td>{{ task.id }}</td><td>{{ task.kind }}</td><td>{{ task.status }}</td><td>{{ task.attempts }}/{{ task.maxAttempts }}</td><td>{{ task.lastError || '—' }}</td><td><el-button v-if="task.status === 'dead'" size="small" @click="retryQueueTask(task)">重试</el-button><el-button v-if="['queued','retry_wait','running'].includes(task.status)" size="small" type="danger" plain @click="cancelQueueTask(task)">取消</el-button></td></tr></tbody></table>
+    </div>
+
+    <div class="panel integration-panel">
+      <div class="panel-title">🔗 外部集成 <span class="panel-sub">仅管理员可配置；密钥只写入后端运行库，不会回显</span></div>
+      <el-alert title="支持通用签名 Webhook；事件失败会自动重试并记录告警状态。具体企业平台仍需厂商契约联调。" type="info" :closable="false" />
+      <form class="integration-form" @submit.prevent="saveIntegration">
+        <label>适配器<select v-model="integration.kind"><option v-for="kind in integrationKinds" :key="kind" :value="kind">{{ kind }}</option></select></label>
+        <label>HTTPS 地址<input v-model="integration.url" type="url" required placeholder="https://hooks.example.com/events"></label>
+        <label>允许的主机（逗号分隔）<input v-model="integration.allowedHosts" required placeholder="hooks.example.com"></label>
+        <label>密钥（留空保留原值）<input v-model="integration.secret" type="password" autocomplete="new-password" placeholder="至少 8 个字符"></label>
+        <label>超时（秒）<input v-model.number="integration.timeoutSeconds" type="number" min="0.1" max="30" step="0.1"></label>
+        <label class="switch-field">启用 <el-switch v-model="integration.enabled" /></label>
+        <div><el-button type="primary" native-type="submit" :loading="integrationLoading">保存集成</el-button><el-button @click.prevent="loadIntegrations">刷新</el-button></div>
+      </form>
+      <table v-if="integrations.length" class="queue-table"><thead><tr><th>适配器</th><th>地址</th><th>状态</th><th>密钥</th><th>操作</th></tr></thead><tbody><tr v-for="item in integrations" :key="item.integrationKind"><td>{{ item.integrationKind }}</td><td>{{ item.url }}</td><td>{{ item.enabled ? '已启用' : '已停用' }}</td><td>{{ item.hasSecret ? '已配置' : '未配置' }}</td><td><el-button size="small" @click="editIntegration(item)">编辑</el-button><el-button size="small" type="danger" plain @click="removeIntegration(item.integrationKind)">删除</el-button></td></tr></tbody></table>
+      <p v-else class="queue-empty">暂无外部集成配置。</p>
+      <details v-if="deliveries.length" class="delivery-details"><summary>最近投递与告警</summary><table class="queue-table"><thead><tr><th>时间</th><th>事件</th><th>资源</th><th>结果</th><th>尝试</th></tr></thead><tbody><tr v-for="item in deliveries.slice(0, 20)" :key="item.idempotencyKey"><td>{{ item.attemptedAt }}</td><td>{{ item.eventType }}</td><td>{{ item.resourceId }}</td><td :class="{ 'delivery-alert': item.alert }">{{ item.alert ? '需处理' : '成功' }}</td><td>{{ item.attemptCount }}</td></tr></tbody></table></details>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { fetchSettings, saveSettings, fetchProviderModels, testProvider, store } from '../api.js'
+import { fetchSettings, saveSettings, fetchProviderModels, testProvider, store, apiFetch } from '../api.js'
+import { createGovernanceClient } from '../governance-api.js'
+import { createIntegrationClient } from '../integration-api.js'
 
 const providers = reactive({})
 const keys = reactive({})          // 新填的 key（不回显已存密钥）
@@ -132,6 +159,12 @@ const common = reactive({ reviewMode: 'C', workerBudgetTokens: 8000, topKArticle
 const loadingModels = ref('')
 const testing = ref('')
 const saving = ref(false)
+const governance = createGovernanceClient(apiFetch)
+const queueTasks = ref([]), queueFilter = ref(''), queueLoading = ref(false), queueError = ref('')
+const integrationClient = createIntegrationClient(apiFetch)
+const integrations = ref([]), deliveries = ref([]), integrationLoading = ref(false)
+const integrationKinds = ['generic', 'enterprise_im', 'ticket', 'procurement_crm', 'electronic_signature']
+const integration = reactive({ kind: 'generic', url: '', allowedHosts: '', secret: '', timeoutSeconds: 5, enabled: false })
 
 const PROVIDER_NAMES = { deepseek: 'DeepSeek 官方', 'opencode-go': 'OpenCode Go（Zen）', siliconflow: '硅基流动' }
 const providerName = (pid) => PROVIDER_NAMES[pid] || pid
@@ -256,9 +289,39 @@ async function loadSettings() {
   }
 }
 
-onMounted(loadSettings)
+async function loadQueue() {
+  if (store.mode === 'offline') return
+  queueLoading.value = true; queueError.value = ''
+  try { queueTasks.value = (await governance.tasks({ status: queueFilter.value || undefined, kind: 'review' })).tasks || [] } catch (e) { queueTasks.value = []; queueError.value = e.message } finally { queueLoading.value = false }
+}
+async function retryQueueTask(task) { try { await governance.retryTask(task.id); ElMessage.success('死信已重新入队'); await loadQueue() } catch (e) { ElMessage.error(e.message) } }
+async function cancelQueueTask(task) { try { await governance.cancelTask(task.id); ElMessage.success('任务已取消'); await loadQueue() } catch (e) { ElMessage.error(e.message) } }
+async function requeueStale() { try { const result = await governance.requeueStale(300); ElMessage.success(`已回收 ${result.requeued?.length || 0} 个失联任务`); await loadQueue() } catch (e) { ElMessage.error(e.message) } }
+async function loadIntegrations() {
+  if (store.mode === 'offline') return
+  try {
+    const [config, history] = await Promise.all([integrationClient.list(), integrationClient.deliveries()])
+    integrations.value = config.integrations || []; deliveries.value = history.deliveries || []
+  } catch (e) { if (e.status !== 403) ElMessage.error(e.message) }
+}
+function editIntegration(item) {
+  integration.kind = item.integrationKind; integration.url = item.url; integration.allowedHosts = (item.allowedHosts || []).join(', ')
+  integration.secret = ''; integration.timeoutSeconds = item.timeoutSeconds; integration.enabled = item.enabled
+}
+async function saveIntegration() {
+  integrationLoading.value = true
+  try {
+    await integrationClient.save(integration.kind, { integrationKind: integration.kind, url: integration.url, allowedHosts: integration.allowedHosts.split(/[,，]/).map(item => item.trim()).filter(Boolean), secret: integration.secret || undefined, timeoutSeconds: integration.timeoutSeconds, enabled: integration.enabled })
+    integration.secret = ''; ElMessage.success('集成配置已保存'); await loadIntegrations()
+  } catch (e) { ElMessage.error(e.message) } finally { integrationLoading.value = false }
+}
+async function removeIntegration(kind) {
+  try { await ElMessageBox.confirm(`删除 ${kind} 集成配置？`, '确认删除', { type: 'warning' }); await integrationClient.remove(kind); ElMessage.success('集成配置已删除'); await loadIntegrations() } catch (e) { if (e !== 'cancel' && e !== 'close') ElMessage.error(e.message || e) }
+}
+
+onMounted(async () => { await loadSettings(); await loadQueue(); await loadIntegrations() })
 // 从离线切回在线时重新加载后端设置
-watch(() => store.mode, (m) => { if (m === 'online') loadSettings() })
+watch(() => store.mode, (m) => { if (m === 'online') { loadSettings(); loadQueue(); loadIntegrations() } })
 </script>
 
 <style scoped>
@@ -292,4 +355,15 @@ watch(() => store.mode, (m) => { if (m === 'online') loadSettings() })
 .route-submit { margin-left: 150px; display: flex; gap: 8px; }
 
 .common-form :deep(.el-form-item) { margin-bottom: 12px; }
+.queue-toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+.queue-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.queue-table th, .queue-table td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: middle; }
+.queue-empty { color: var(--ink-3); font-size: 13px; padding: 16px 0; }
+.integration-form { display: grid; grid-template-columns: 1fr 2fr; gap: 12px 16px; margin: 16px 0; }
+.integration-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--ink-2); }
+.integration-form input, .integration-form select { font: inherit; border: 1px solid var(--line); border-radius: 5px; padding: 9px; box-sizing: border-box; width: 100%; }
+.switch-field { flex-direction: row !important; align-items: center; gap: 10px !important; }
+.delivery-details { margin-top: 16px; }
+.delivery-alert { color: #b45309; font-weight: 600; }
+@media (max-width: 720px) { .integration-form { grid-template-columns: 1fr; } }
 </style>

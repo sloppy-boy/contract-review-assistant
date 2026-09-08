@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import time as _time
+from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send
@@ -22,6 +23,8 @@ from .nodes.extract import build_extract_node
 from .nodes.report import report_node
 from .nodes.reviewer import build_reviewer_node
 from .nodes.workers import build_worker_node, worker_fanout_categories
+from .playbooks import PlaybookSnapshot
+from .playbook_engine import playbook_node
 from .settings_store import active_llm_config
 from .state import ContractState
 
@@ -54,6 +57,7 @@ def build_graph(
         build_reviewer_node(retriever, llm, reviewer=reviewer_llm, mode=mode, verify=do_verify),
     )
     builder.add_node("report_gen", lambda s: report_node(s, mode=mode))
+    builder.add_node("playbook", playbook_node)
 
     builder.add_edge(START, "extract")
 
@@ -67,13 +71,14 @@ def build_graph(
 
     # 复核可插拔：A 档跳过复核直接报告；B/C 档经复核
     def after_workers(state: ContractState):
-        return "report_gen" if mode == "A" else "reviewer"
+        return "playbook" if mode == "A" else "reviewer"
 
     for c in cats:
         builder.add_conditional_edges(
-            f"worker_{c}", after_workers, {"report_gen": "report_gen", "reviewer": "reviewer"}
+            f"worker_{c}", after_workers, {"playbook": "playbook", "reviewer": "reviewer"}
         )
-    builder.add_edge("reviewer", "report_gen")
+    builder.add_edge("reviewer", "playbook")
+    builder.add_edge("playbook", "report_gen")
     builder.add_edge("report_gen", END)
     return builder.compile()
 
@@ -85,6 +90,7 @@ def run_pipeline(
     review_mode: str | None = None,
     verify: bool | None = None,
     progress=None,
+    playbook_snapshot: PlaybookSnapshot | dict[str, Any] | None = None,
 ) -> dict:
     """便捷入口：单合同跑流水线，返回报告 dict（统一 JSON schema）。
 
@@ -101,6 +107,14 @@ def run_pipeline(
       status "running" | "done"；detail 如 "5/13"（worker 完成计数）。
       基于 LangGraph stream("updates") 的真实节点产出（前端进度与报告时间同步）。
     """
+    snapshot_data: dict[str, Any] | None = None
+    if playbook_snapshot is not None:
+        raw = playbook_snapshot.model_dump(mode="json") if isinstance(playbook_snapshot, PlaybookSnapshot) else playbook_snapshot
+        snapshot = PlaybookSnapshot.model_validate(raw)
+        if snapshot.content.contractType != contract_type:
+            raise ValueError("playbook contract type does not match review request")
+        snapshot_data = snapshot.model_dump(mode="json")
+
     forced_mock = os.environ.get("DSH_FORCE_MOCK", "") == "1"
     reviewer = None
     llm = None
@@ -141,6 +155,8 @@ def run_pipeline(
             "trace": [],
             "meta": {},
         }
+        if snapshot_data is not None:
+            initial["playbook_snapshot"] = snapshot_data
         # 真实进度：stream("updates") 逐个节点产出（vs invoke 一次性返回）
         # 阶段事件序列必须连续（每阶段 running → done），否则前端进度条卡住：
         #   extract 开始前发 0 running；extract done 后立即发 1 running（workers 将执行）；

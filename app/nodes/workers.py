@@ -158,6 +158,9 @@ def build_worker_node(category: str, retriever, llm: LLMClient | None = None):
             out: list[Finding] = []
             for f in rule_baseline_findings(clauses):
                 if SUBTYPE_TO_CATEGORY.get(f.riskType) == category:
+                    f.source = "rule"
+                    f.sourceDetails = {"engine": "risk_matrix_baseline", "categoryId": category}
+                    f.sources = [{"source": "rule", **f.sourceDetails}]
                     out.append(f)
             return {"findings": out}
 
@@ -226,6 +229,7 @@ def build_worker_node(category: str, retriever, llm: LLMClient | None = None):
                 Finding(
                     id=f"w_{category}-{it.clauseId}-{i}",
                     worker=category,
+                    source="model",
                     clauseId=it.clauseId,
                     clauseQuote=it.clauseQuote,
                     riskType=it.riskType,

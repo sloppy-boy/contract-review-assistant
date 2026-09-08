@@ -21,3 +21,9 @@ class FeedbackStore:
         with self._connect() as conn:
             rows = conn.execute("SELECT run_id, finding_id, decision, reason FROM feedback WHERE tenant_id = ?", (tenant_id,)).fetchall()
         return [{"runId": r[0], "findingId": r[1], "decision": r[2], "reason": r[3]} for r in rows]
+
+    def delete_run(self, *, tenant_id: str, run_id: str) -> int:
+        """Delete feedback metadata linked to a purged review run."""
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM feedback WHERE tenant_id=? AND run_id=?", (tenant_id, run_id))
+            return cursor.rowcount

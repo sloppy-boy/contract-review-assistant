@@ -108,28 +108,39 @@
               <el-tag :type="tagType(r.severity)" size="small" effect="dark">{{ sevName(r.severity) }}</el-tag>
               <b class="rt">{{ r.riskType }}</b>
               <el-tag v-if="r.disputed" type="warning" size="small" effect="plain">有争议</el-tag>
-              <el-tag v-if="r.reviewStatus" :type="reviewTagType(r.reviewStatus)" size="small" effect="plain">
-                {{ reviewStatusName(r.reviewStatus) }}
+              <el-tag :type="reviewTagType(humanStatus(r))" size="small" effect="plain">
+                {{ reviewStatusName(humanStatus(r)) }}
               </el-tag>
               <span class="rcid">条款 {{ r.clauseId }}</span>
               <span class="rworker">{{ workerName(r.worker) }}</span>
+            </div>
+            <div class="evidence-meta">
+              <span>位置：{{ r.paragraphId || '段落未定位' }} · {{ r.location || '原文位置未提供' }}</span>
+              <span>置信度：{{ confidenceLabel(r.confidence) }}</span>
+              <el-tag v-if="r.requiresHumanReview !== false" size="small" type="warning">需人工确认</el-tag>
+              <span v-for="(source, index) in riskSources(r)" :key="index">{{ sourceName(source.source) }}<template v-if="source.ruleId"> · {{ source.ruleId }} / v{{ source.version }}</template></span>
             </div>
             <el-collapse class="risk-collapse">
               <el-collapse-item name="quote" title="📜 原文摘录">
                 <div class="quote-block">{{ r.clauseQuote }}</div>
               </el-collapse-item>
               <el-collapse-item name="basis" title="⚖️ 法条依据">
-                <el-tag size="small" :type="basisType(r.legalBasis.tier)" effect="light">{{ basisName(r.legalBasis.tier) }}</el-tag>
-                <div v-if="r.legalBasis.articleId" class="basis">
+                <el-tag size="small" :type="basisType(r.legalBasis?.tier || 'none')" effect="light">{{ basisName(r.legalBasis?.tier || 'none') }}</el-tag>
+                <div v-if="r.legalBasis?.articleId" class="basis">
                   <b>{{ r.legalBasis.articleId }}</b> · {{ r.legalBasis.version }}
                   <div class="quote-block basis-quote">{{ r.legalBasis.quote }}</div>
                 </div>
-                <div v-else-if="r.legalBasis.tier === 'none'" class="basis dim">提示性质，无明确法条依据（未硬编）</div>
-                <div v-else class="basis dim">间接依据：诚信/公平原则等原则性条款（非直接条文）</div>
+                <div v-else class="basis dim">未提供可核验的具体法条，请人工确认。</div>
               </el-collapse-item>
               <el-collapse-item name="advice" title="💡 证据与修改建议">
                 <div class="basis"><b>证据：</b>{{ r.evidence }}</div>
                 <div class="basis"><b>建议：</b>{{ r.suggestion }}</div>
+                <div class="basis"><b>升级建议：</b>{{ r.escalationRecommendation || '未提供' }}</div>
+                <div v-for="(source, index) in riskSources(r)" :key="index" class="basis">
+                  <b>{{ sourceName(source.source) }}：</b><span v-if="source.playbookId">{{ source.playbookId }} / v{{ source.version }} / {{ source.contentHash }}</span>
+                  <div v-if="source.evidence">来源证据：{{ source.evidence }} · 置信度 {{ confidenceLabel(source.confidence) }}</div>
+                  <div v-if="source.suggestionClauseText && source.suggestionClauseText !== r.suggestionClauseText" class="quote-block">{{ source.suggestionClauseText }} <el-button size="small" text @click.stop="copy(source.suggestionClauseText)">复制来源替代条款</el-button></div>
+                </div>
                 <div v-if="r.suggestionClauseText" class="basis">
                   <b>示范条款：</b>
                   <el-button size="small" text type="primary" @click.stop="copy(r.suggestionClauseText)">📋 复制</el-button>
@@ -138,16 +149,18 @@
                 <div v-if="r.status === 'disputed'" class="basis disputed-note">
                   ⚠️ 复核驳回后 worker 坚持：{{ r.reVerifyJustification }}
                 </div>
-                <div v-if="reviewRunId && r.reviewStatus === 'pending_review'" class="human-review-actions">
+                <div v-if="reviewRunId" class="human-review-actions">
                   <span>人工复核：</span>
                   <el-button size="small" type="success" plain @click.stop="reviewFinding(r, 'accepted')">采纳</el-button>
                   <el-button size="small" type="warning" plain @click.stop="reviewFinding(r, 'accepted_with_changes')">修改后采纳</el-button>
                   <el-button size="small" type="danger" plain @click.stop="reviewFinding(r, 'rejected')">驳回</el-button>
                   <el-button size="small" plain @click.stop="reviewFinding(r, 'escalated')">升级会审</el-button>
+                  <el-button v-if="humanStatus(r) !== 'pending'" size="small" plain @click.stop="reviewFinding(r, 'pending')">重新待审</el-button>
                 </div>
-                <div v-else-if="r.reviewDecision" class="basis review-decision">
+                <div v-if="r.reviewDecision" class="basis review-decision">
                   <b>人工裁决：</b>{{ reviewStatusName(r.reviewDecision.decision) }}
                   <span v-if="r.reviewDecision.reason"> · {{ r.reviewDecision.reason }}</span>
+                  <div>{{ r.reviewDecision.actor || '历史记录未提供处置人' }} · {{ r.reviewDecision.updatedAt }}</div>
                 </div>
               </el-collapse-item>
             </el-collapse>
@@ -161,7 +174,8 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { saveFindingDisposition } from '../api.js'
+import { apiFetch, saveFindingDisposition } from '../api.js'
+import { humanStatus, confidenceLabel, sourceName, riskSources, requestWordExport } from '../report-evidence.js'
 
 const props = defineProps({
   report: { type: Object, required: true },
@@ -178,11 +192,11 @@ const basisType = (t) => ({ direct: 'success', indirect: 'warning', none: 'info'
 const basisName = (t) => ({ direct: '直接依据', indirect: '间接依据', none: '无直接依据' }[t] || t)
 const workerName = (w) => (w ? `· ${w.replace('_', ' ')}` : '')
 const reviewStatusName = (status) => ({
-  pending_review: '待人工复核', accepted: '已采纳', accepted_with_changes: '修改后采纳',
+  pending: '待人工处置', pending_review: '待人工复核', accepted: '已采纳', accepted_with_changes: '修改后采纳',
   rejected: '已驳回', escalated: '升级会审', not_required: '无需复核',
 }[status] || status)
 const reviewTagType = (status) => ({
-  pending_review: 'warning', accepted: 'success', accepted_with_changes: 'success',
+  pending: 'warning', pending_review: 'warning', accepted: 'success', accepted_with_changes: 'success',
   rejected: 'danger', escalated: 'info', not_required: 'info',
 }[status] || 'info')
 const hasDisputed = computed(() => props.report.risks.some((r) => r.disputed))
@@ -194,12 +208,11 @@ const pipelineTimes = computed(() => {
 })
 
 async function reviewFinding(risk, decision) {
-  const requiresReason = ['accepted_with_changes', 'rejected', 'escalated'].includes(decision)
   try {
     const { value = '' } = await ElMessageBox.prompt(
-      requiresReason ? '请填写裁决理由（必填，将写入审计记录）。' : '可补充采纳理由（将写入审计记录）。',
+      '请填写处置理由（必填，将记录处置人、时间和理由）。',
       `确认${reviewStatusName(decision)}`,
-      { inputPlaceholder: requiresReason ? '例如：与业务口径不符，需保留原条款' : '可选', inputValidator: (value) => !requiresReason || value.trim() || '请填写裁决理由' },
+      { inputPlaceholder: '请说明本次决定的依据', inputValidator: (value) => String(value || '').trim().length > 0 || '请填写处置理由' },
     )
     const disposition = await saveFindingDisposition(props.reviewRunId, risk.id, decision, value)
     emit('review-updated', { findingId: risk.id, disposition })
@@ -277,8 +290,12 @@ function onRiskClick(r) {
   hit?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
 }
 
-function copy(text) {
-  navigator.clipboard?.writeText(text).then(() => ElMessage.success('已复制示范条款'))
+async function copy(text) {
+  try {
+    if (!navigator.clipboard) throw new Error('当前浏览器不支持剪贴板，请手动选择并复制')
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制替代条款')
+  } catch (error) { ElMessage.error(error.message || '复制失败，请手动复制') }
 }
 
 function exportJson() {
@@ -292,13 +309,7 @@ function exportJson() {
 async function exportWord() {
   // 后端 python-docx 生成正式 Word 审阅报告（在线/离线报告均可导出）
   try {
-    const resp = await fetch('/api/export/word', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ report: props.report }),
-    })
-    if (!resp.ok) throw new Error(`后端导出失败：${resp.status}`)
-    const blob = await resp.blob()
+    const blob = await requestWordExport(apiFetch, props.reviewRunId, props.report)
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
     a.download = `${props.report.contract?.name || 'report'}.docx`
@@ -362,6 +373,8 @@ async function exportWord() {
 .nav-search { margin-bottom: 10px; }
 
 .risk-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px 0; }
+.evidence-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; padding: 10px 14px; font-size: 12px; color: var(--ink-2); }
+.human-review-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .risk-head .rt { flex: 1; font-size: 14px; color: var(--ink); }
 .rcid { color: var(--ink-3); font-size: 12px; }
 .rworker { color: var(--ink-3); font-size: 11px; }

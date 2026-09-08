@@ -46,7 +46,23 @@ def test_trace_summary_aggregates_latency_error_and_token_cost(tmp_path):
     traces.record(tenant_id="acme", run_id="r1", stage="extract", elapsed_ms=100, input_tokens=20, output_tokens=10)
     traces.record(tenant_id="acme", run_id="r2", stage="extract", elapsed_ms=300, input_tokens=30, output_tokens=20, error="timeout")
 
-    assert traces.summary("acme") == {"runs": 2, "errors": 1, "avgLatencyMs": 200, "inputTokens": 50, "outputTokens": 30}
+    assert traces.summary("acme") == {
+        "runs": 2, "errors": 1, "avgLatencyMs": 200, "inputTokens": 50, "outputTokens": 30,
+        "p50LatencyMs": 100, "p95LatencyMs": 300, "errorRate": 0.5,
+        "slo": {"latencyP95Ms": 300, "maxLatencyP95Ms": 1000, "errorRate": 0.5, "maxErrorRate": 0.05, "status": "breached"},
+    }
+
+
+def test_trace_summary_exposes_latency_percentiles_and_slo_state(tmp_path):
+    from app.observability import TraceStore
+    traces = TraceStore(tmp_path / "trace.db")
+    for latency in [100, 200, 400, 800, 1200]:
+        traces.record(tenant_id="acme", run_id=f"run-{latency}", stage="report", elapsed_ms=latency)
+    summary = traces.summary("acme")
+    assert summary["p50LatencyMs"] == 400
+    assert summary["p95LatencyMs"] == 1200
+    assert summary["errorRate"] == 0.0
+    assert summary["slo"]["latencyP95Ms"] == 1200 and summary["slo"]["status"] == "breached"
 
 
 def test_feedback_export_redacts_contract_text_and_keeps_decision(tmp_path):
@@ -57,6 +73,19 @@ def test_feedback_export_redacts_contract_text_and_keeps_decision(tmp_path):
 
     exported = feedback.export_training_examples("acme")
     assert exported == [{"runId": "r1", "findingId": "f1", "decision": "rejected", "reason": "业务不接受"}]
+
+
+def test_feedback_and_trace_rows_can_be_purged_with_their_review_run(tmp_path):
+    from app.feedback import FeedbackStore
+    from app.observability import TraceStore
+    feedback = FeedbackStore(tmp_path / "feedback.db")
+    traces = TraceStore(tmp_path / "trace.db")
+    feedback.record(tenant_id="acme", run_id="r1", finding_id="f1", decision="accepted", reason="checked")
+    traces.record(tenant_id="acme", run_id="r1", stage="report", elapsed_ms=10)
+    assert feedback.delete_run(tenant_id="acme", run_id="r1") == 1
+    assert traces.delete_run(tenant_id="acme", run_id="r1") == 1
+    assert feedback.export_training_examples("acme") == []
+    assert traces.summary("acme")["runs"] == 0
 
 
 def test_evaluation_gate_rejects_metrics_below_threshold():
@@ -80,6 +109,31 @@ def test_retriever_filters_version_and_reranks_explainably():
     hits = retriever.search("违约金过高", version="2025")
     assert [hit["id"] for hit in hits] == ["A"]
     assert hits[0]["retrieval"]["strategy"] == "lexical_hybrid_rerank"
+
+
+def test_hybrid_retriever_combines_dense_and_keyword_scores_with_provenance():
+    from app.legal.retrieval import HybridRetriever
+
+    articles = [
+        {"id": "A", "article": "第1条", "text": "付款期限", "keywords": ["付款"]},
+        {"id": "B", "article": "第2条", "text": "交付期限", "keywords": ["交付"]},
+    ]
+    vectors = {"付款期限": [1, 0], "交付期限": [0, 1], "付款约定": [0.8, 0.6]}
+    retriever = HybridRetriever(articles, embed_fn=lambda text: vectors.get(text, [0, 0]))
+    hits = retriever.search("付款约定", top_k=2)
+    assert hits[0].article["id"] == "A"
+    assert hits[0].metadata["strategy"] == "dense_lexical_rerank"
+    assert 0 <= hits[0].metadata["denseScore"] <= 1
+
+
+def test_retrieval_evaluator_reports_recall_mrr_and_citation_accuracy():
+    from app.evaluation_gate import RetrievalEvaluationGate, evaluate_retrieval
+
+    cases = [{"query": "付款", "relevant": ["A"]}, {"query": "交付", "relevant": ["B"]}]
+    results = evaluate_retrieval(cases, lambda query, k: [{"id": "A"}] if query == "付款" else [{"id": "X"}], k=3)
+    assert results == {"queries": 2, "recallAtK": 0.5, "mrr": 0.5, "citationAccuracy": 0.5}
+    gate = RetrievalEvaluationGate({"recallAtK": 0.5, "mrr": 0.4, "citationAccuracy": 0.5})
+    assert gate.evaluate(results)["passed"] is True
 
 
 def test_platform_metrics_and_feedback_api_are_tenant_scoped(monkeypatch, tmp_path):

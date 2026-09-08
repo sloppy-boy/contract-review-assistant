@@ -1,0 +1,3 @@
+# Optional local semantic-search dependency. The model itself is not downloaded:
+# configure CRA_EMBEDDING_MODEL_PATH to an existing SentenceTransformer directory.
+sentence-transformers>=3.0.0

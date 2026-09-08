@@ -14,13 +14,16 @@ import re
 import threading
 import time
 import copy
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Callable, Literal
 from pathlib import Path
 from urllib.parse import quote
 
 import httpx
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from .config import (
     BALANCE_WARN_THRESHOLD,
@@ -31,23 +34,65 @@ from .config import (
     using_mock,
 )
 from .export_word import report_to_docx
+from .report_evidence import normalize_report
 from .graph import run_pipeline
-from .llm import BalanceError
 from .settings_store import active_llm_config, load_settings, public_settings, save_settings
 from .review_runs import ReviewRunStore
+from .playbook_api import create_playbook_router
+from .playbook_defaults import built_in_playbook_snapshot
+from .playbook_store import PlaybookStore
+from .playbooks import ReviewScope
+from .collaboration import CollaborationStore
+from .collaboration_api import create_collaboration_router
+from .asset_store import AssetStore
+from .asset_api import create_asset_router
 from .feedback import FeedbackStore
 from .observability import TraceStore
 from .security import ApiKeyAuthenticator, Principal
+from .task_queue import TaskQueue
+from .data_lifecycle import DataLifecycleStore
+from .workflow_automation import IntegrationConfigStore
+from .review_worker import execute_review_task
 
 logger = logging.getLogger(__name__)
+_REAL_THREAD = threading.Thread
 
 app = FastAPI(title="合同审查助手", version="0.1.0")
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 review_run_store = ReviewRunStore(REVIEW_RUNS_PATH)
+playbook_store = PlaybookStore(REVIEW_RUNS_PATH.with_name("playbooks.db"))
+collaboration_store = CollaborationStore(REVIEW_RUNS_PATH.with_name("collaboration.db"))
+asset_store = AssetStore(REVIEW_RUNS_PATH.with_name("assets.db"))
 authenticator = ApiKeyAuthenticator.from_environment()
 trace_store = TraceStore(REVIEW_RUNS_PATH.with_name("traces.db"))
 feedback_store = FeedbackStore(REVIEW_RUNS_PATH.with_name("feedback.db"))
+lifecycle_store = DataLifecycleStore(REVIEW_RUNS_PATH.with_name("lifecycle.db"))
+integration_store = IntegrationConfigStore(REVIEW_RUNS_PATH.with_name("integrations.db"))
+
+
+def _task_queue() -> TaskQueue:
+    """Resolve beside the configured run store so tests and tenants stay isolated."""
+    return TaskQueue(Path(review_run_store.path).with_name("tasks.db"))
+
+
+TASK_LEASE_HEARTBEAT_SECONDS = max(1, int(os.environ.get("TASK_LEASE_HEARTBEAT_SECONDS", "30")))
+
+
+def _schedule_lease_heartbeat(queue: TaskQueue, task_id: str, worker_id: str, tenant_id: str) -> None:
+    """Renew a running task lease until the worker acknowledges or exits."""
+    def renew() -> None:
+        while True:
+            time.sleep(TASK_LEASE_HEARTBEAT_SECONDS)
+            try:
+                alive = queue.heartbeat(task_id, worker_id, tenant_id=tenant_id)
+            except Exception:
+                logger.exception("任务 %s lease heartbeat failed", task_id)
+                return
+            if alive is None:
+                return
+
+    _REAL_THREAD(target=renew, daemon=True).start()
 
 # 后端并发限制：同时最多运行 N 条流水线（防多用户并发打爆 LLM API 限流）
 PIPELINE_MAX_CONCURRENT = int(os.environ.get("PIPELINE_MAX_CONCURRENT", "2"))
@@ -72,7 +117,8 @@ def _sanitize_filename(name: str, fallback: str = "contract-review-report") -> s
 
 
 class ExportWordReq(BaseModel):
-    report: dict
+    report: dict | None = None
+    runId: str | None = None
 
 
 class FindingDispositionReq(BaseModel):
@@ -85,6 +131,81 @@ class FeedbackReq(BaseModel):
     reason: str = ""
 
 
+class CancelRunReq(BaseModel):
+    reason: str
+
+
+class LegalHoldReq(BaseModel):
+    resourceType: Literal["asset", "review_run", "collaboration_request", "playbook_version"]
+    resourceId: str
+    reason: str
+
+
+class RetentionPurgeReq(BaseModel):
+    resourceType: Literal["asset", "review_run", "collaboration_request", "playbook_version"] = "asset"
+    before: str
+    dryRun: bool = True
+
+
+@dataclass(frozen=True)
+class _LifecycleAdapter:
+    exists: Callable[[str], bool]
+    candidates: Callable[[str], list[dict]]
+    delete: Callable[[dict], object]
+
+
+def _lifecycle_adapter(resource_type: str, tenant_id: str) -> _LifecycleAdapter:
+    if resource_type == "asset":
+        return _LifecycleAdapter(
+            exists=lambda resource_id: asset_store.exists_for_tenant(resource_id, tenant_id=tenant_id),
+            candidates=lambda before: asset_store.deleted_candidates(tenant_id=tenant_id, before=before),
+            delete=lambda record: asset_store.purge_deleted(record["resourceId"], tenant_id=tenant_id),
+        )
+    if resource_type == "review_run":
+        return _LifecycleAdapter(
+            exists=lambda resource_id: bool((review_run_store.get_run(resource_id) or {}).get("tenantId") == tenant_id),
+            candidates=lambda before: review_run_store.retention_candidates(tenant_id=tenant_id, before=before),
+            delete=lambda record: _purge_review_run(record["resourceId"], tenant_id),
+        )
+    if resource_type == "collaboration_request":
+        return _LifecycleAdapter(
+            exists=lambda resource_id: collaboration_store.get(resource_id, actor=Principal("governance", tenant_id, "admin")) is not None,
+            candidates=lambda before: collaboration_store.retention_candidates(tenant_id=tenant_id, before=before),
+            delete=lambda record: collaboration_store.purge_request(record["resourceId"], tenant_id=tenant_id),
+        )
+    if resource_type == "playbook_version":
+        def exists(resource_id: str) -> bool:
+            book_id, separator, raw_version = resource_id.rpartition(":")
+            try:
+                version = int(raw_version) if separator else 0
+            except ValueError:
+                version = 0
+            return bool(book_id and version > 0 and playbook_store.get_version(book_id, version, tenant_id=tenant_id) is not None)
+        return _LifecycleAdapter(
+            exists=exists,
+            candidates=lambda before: playbook_store.retention_candidates(tenant_id=tenant_id, before=before),
+            delete=lambda record: playbook_store.purge_version(*record["resourceId"].rsplit(":", 1), tenant_id=tenant_id),
+        )
+    raise ValueError("unknown lifecycle resource type")
+
+
+def _purge_review_run(run_id: str, tenant_id: str) -> bool:
+    deleted = review_run_store.purge_run(run_id, tenant_id=tenant_id)
+    feedback_store.delete_run(tenant_id=tenant_id, run_id=run_id)
+    trace_store.delete_run(tenant_id=tenant_id, run_id=run_id)
+    return deleted
+
+
+class IntegrationConfigReq(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    integrationKind: Literal["generic", "enterprise_im", "ticket", "procurement_crm", "electronic_signature"]
+    url: str
+    allowedHosts: list[str]
+    secret: str | None = None
+    timeoutSeconds: float = 5.0
+    enabled: bool = False
+
+
 def current_principal(x_api_key: str | None = Header(default=None)) -> Principal:
     try:
         return authenticator.authenticate(x_api_key)
@@ -92,27 +213,197 @@ def current_principal(x_api_key: str | None = Header(default=None)) -> Principal
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
 
+def _require_governance(principal: Principal, *roles: str) -> None:
+    try:
+        ApiKeyAuthenticator.require_role(principal, *roles)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+def _dispatch_integration_event(event: dict) -> dict:
+    """Dispatch a data-minimized event; integration failures never break workflow writes."""
+    try:
+        key = f"{event.get('type')}:{event.get('tenantId')}:{event.get('resourceId')}:{event.get('createdAt')}"
+        return integration_store.dispatch(event, idempotency_key=key)
+    except Exception:
+        logger.exception("外部集成事件派发失败")
+        return {"delivered": False, "configured": False}
+
+
+app.include_router(create_playbook_router(lambda: playbook_store, current_principal))
+app.include_router(create_collaboration_router(
+    lambda: collaboration_store, lambda: review_run_store, lambda: authenticator, current_principal,
+    dispatch_event=lambda event: _dispatch_integration_event(event),
+))
+app.include_router(create_asset_router(lambda: asset_store, lambda: authenticator, current_principal, lambda: review_run_store, lambda: lifecycle_store))
+
+
 @app.get("/platform/metrics")
 def platform_metrics(principal: Principal = Depends(current_principal)) -> dict:
-    ApiKeyAuthenticator.require_role(principal, "admin", "legal_reviewer")
+    _require_governance(principal, "admin", "legal_reviewer")
     return trace_store.summary(principal.tenant_id)
+
+
+@app.get("/platform/integrations")
+def list_integrations(principal: Principal = Depends(current_principal)) -> dict:
+    _require_governance(principal, "admin")
+    return {"integrations": integration_store.list_configs(tenant_id=principal.tenant_id)}
+
+
+@app.get("/platform/integrations/deliveries")
+def list_integration_deliveries(principal: Principal = Depends(current_principal)) -> dict:
+    _require_governance(principal, "admin")
+    return {"deliveries": integration_store.attempts(tenant_id=principal.tenant_id)}
+
+
+@app.put("/platform/integrations/{integration_kind}")
+def configure_integration(integration_kind: Literal["generic", "enterprise_im", "ticket", "procurement_crm", "electronic_signature"], req: IntegrationConfigReq, principal: Principal = Depends(current_principal)) -> dict:
+    _require_governance(principal, "admin")
+    if integration_kind != req.integrationKind:
+        raise HTTPException(status_code=422, detail="integration kind mismatch")
+    try:
+        return integration_store.configure(tenant_id=principal.tenant_id, integration_kind=req.integrationKind, url=req.url, allowed_hosts=req.allowedHosts, secret=req.secret, enabled=req.enabled, timeout_seconds=req.timeoutSeconds)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.delete("/platform/integrations/{integration_kind}")
+def delete_integration(integration_kind: Literal["generic", "enterprise_im", "ticket", "procurement_crm", "electronic_signature"], principal: Principal = Depends(current_principal)) -> dict:
+    _require_governance(principal, "admin")
+    if not integration_store.delete(tenant_id=principal.tenant_id, integration_kind=integration_kind):
+        raise HTTPException(status_code=404, detail="integration not found")
+    return {"deleted": True}
 
 
 @app.get("/platform/feedback/export")
 def export_feedback(principal: Principal = Depends(current_principal)) -> dict:
-    ApiKeyAuthenticator.require_role(principal, "admin", "legal_reviewer")
+    _require_governance(principal, "admin", "legal_reviewer")
     return {"examples": feedback_store.export_training_examples(principal.tenant_id)}
 
 
-@app.post("/export/word")
-def export_word(req: ExportWordReq) -> Response:
-    """报告 JSON → Word 文档（python-docx）。离线/在线报告均可导出（无状态）。"""
+@app.get("/platform/legal-holds")
+def list_legal_holds(principal: Principal = Depends(current_principal)) -> dict:
+    _require_governance(principal, "admin", "legal_reviewer")
+    return {"holds": lifecycle_store.holds(principal.tenant_id)}
+
+
+@app.post("/platform/legal-holds")
+def place_legal_hold(req: LegalHoldReq, principal: Principal = Depends(current_principal)) -> dict:
+    _require_governance(principal, "admin", "legal_reviewer")
+    if not req.resourceId.strip():
+        raise HTTPException(422, "resourceId must not be blank")
+    if not _lifecycle_adapter(req.resourceType, principal.tenant_id).exists(req.resourceId):
+        raise HTTPException(404, "resource not found")
     try:
-        docx_bytes = report_to_docx(req.report)
+        return lifecycle_store.place_hold(tenant_id=principal.tenant_id, resource_type=req.resourceType, resource_id=req.resourceId, reason=req.reason, actor=principal.subject)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.delete("/platform/legal-holds/{resource_type}/{resource_id}")
+def release_legal_hold(resource_type: Literal["asset", "review_run", "collaboration_request", "playbook_version"], resource_id: str, principal: Principal = Depends(current_principal)) -> dict:
+    _require_governance(principal, "admin", "legal_reviewer")
+    result = lifecycle_store.release_hold(principal.tenant_id, resource_type, resource_id, actor=principal.subject)
+    if result is None:
+        raise HTTPException(404, "legal hold not found")
+    return result
+
+
+@app.get("/platform/data-lifecycle/events")
+def lifecycle_events(principal: Principal = Depends(current_principal)) -> dict:
+    _require_governance(principal, "admin", "legal_reviewer")
+    return {"events": lifecycle_store.events(principal.tenant_id)}
+
+
+@app.post("/platform/data-lifecycle/purge")
+def purge_retention(req: RetentionPurgeReq, principal: Principal = Depends(current_principal)) -> dict:
+    _require_governance(principal, "admin")
+    try:
+        adapter = _lifecycle_adapter(req.resourceType, principal.tenant_id)
+        records = adapter.candidates(req.before)
+        delete = adapter.delete
+        return lifecycle_store.purge(records, tenant_id=principal.tenant_id, before=req.before, actor=principal.subject, dry_run=req.dryRun, delete=delete)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get("/platform/tasks")
+def list_platform_tasks(
+    status: str | None = None,
+    kind: str | None = None,
+    limit: int = 100,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    """Expose queue control-plane metadata to governance operators."""
+    _require_governance(principal, "admin", "legal_reviewer")
+    try:
+        return {"tasks": _task_queue().list_tasks(status=status, kind=kind, tenant_id=principal.tenant_id, limit=limit)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/platform/tasks/requeue-stale")
+def requeue_stale_platform_tasks(lease_seconds: int = 300, principal: Principal = Depends(current_principal)) -> dict:
+    _require_governance(principal, "admin")
+    try:
+        return {"requeued": _task_queue().requeue_stale(datetime.now(UTC), lease_seconds=lease_seconds, tenant_id=principal.tenant_id)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/platform/tasks/{task_id}")
+def get_platform_task(task_id: str, principal: Principal = Depends(current_principal)) -> dict:
+    _require_governance(principal, "admin", "legal_reviewer")
+    task = _task_queue().get(task_id, tenant_id=principal.tenant_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return task
+
+
+@app.post("/platform/tasks/{task_id}/retry")
+def retry_platform_task(task_id: str, principal: Principal = Depends(current_principal)) -> dict:
+    _require_governance(principal, "admin")
+    try:
+        task = _task_queue().retry_dead(task_id, tenant_id=principal.tenant_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return task
+
+
+@app.post("/platform/tasks/{task_id}/cancel")
+def cancel_platform_task(task_id: str, principal: Principal = Depends(current_principal)) -> dict:
+    _require_governance(principal, "admin", "legal_reviewer")
+    task = _task_queue().cancel(task_id, tenant_id=principal.tenant_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return task
+
+
+@app.post("/export/word")
+def export_word(req: ExportWordReq, principal: Principal = Depends(current_principal)) -> Response:
+    """Bound exports use only persisted report and audit records; legacy JSON is unbound."""
+    audit = None
+    if req.runId:
+        run = review_run_store.get_run(req.runId)
+        if run is None or run["tenantId"] != principal.tenant_id:
+            raise HTTPException(status_code=404, detail="task not found")
+        if run["status"] != "done" or not run.get("report"):
+            raise HTTPException(status_code=409, detail="review run has no completed report")
+        export_report = normalize_report(run["report"], dispositions=review_run_store.get_dispositions(req.runId))
+        audit = {"runId": req.runId, "createdAt": run["createdAt"], "updatedAt": run["updatedAt"],
+                 "events": review_run_store.list_events(req.runId)}
+    elif req.report is not None:
+        export_report = normalize_report(req.report, dispositions={})
+    else:
+        raise HTTPException(status_code=422, detail="runId or report is required")
+    try:
+        docx_bytes = report_to_docx(export_report, audit=audit)
     except Exception:  # S17：不回显内部异常细节（信息泄露）；具体原因记服务端日志
         logger.exception("Word 导出失败")
         raise HTTPException(status_code=500, detail="Word 导出失败：报告数据不合法")
-    name = _sanitize_filename(req.report.get("contract", {}).get("name"))
+    name = _sanitize_filename(export_report.get("contract", {}).get("name"))
     # S1：filename 仅 ASCII 安全字符；中文经 RFC 5987 filename* 传递（latin-1 500 根除）
     ascii_name = name.encode("ascii", "ignore").decode("ascii").strip(" .") or "contract-review-report"
     filename = f"{name}.docx"
@@ -293,6 +584,11 @@ async def upload(
     file: UploadFile | None = None,
     text: str | None = Form(default=None),
     contract_type: str = Form(default="purchase"),
+    playbook_id: str | None = Form(default=None),
+    playbook_version: int | None = Form(default=None, gt=0),
+    jurisdiction: str = Form(default="CN"),
+    business_scenario: str = Form(default="general"),
+    effective_scope: str = Form(default="*"),
     principal: Principal = Depends(current_principal),
 ) -> dict:
     """上传合同（文件或文本）→ 返回 taskId（异步跑流水线）。"""
@@ -314,17 +610,50 @@ async def upload(
             status_code=413,
             detail=f"合同内容过长（{len(content)} 字符，上限 {MAX_UPLOAD_CHARS}），请拆分后上传",
         )
-    task = review_run_store.create_run(contract_type=contract_type, tenant_id=principal.tenant_id)
+    contract_type = contract_type.strip()
+    jurisdiction = jurisdiction.strip()
+    business_scenario = business_scenario.strip()
+    effective_scope = effective_scope.strip()
+    if not all((contract_type, jurisdiction, business_scenario, effective_scope)):
+        raise HTTPException(status_code=422, detail="review scope fields must not be blank")
+    if playbook_id is not None:
+        playbook_id = playbook_id.strip()
+        if not playbook_id:
+            raise HTTPException(status_code=422, detail="playbook_id must not be blank")
+    if (playbook_id is None) != (playbook_version is None):
+        raise HTTPException(status_code=422, detail="playbook_id and playbook_version must be supplied together")
+    if playbook_id is not None:
+        try:
+            snapshot = playbook_store.resolve_snapshot(
+                playbook_id, playbook_version, tenant_id=principal.tenant_id,
+                scope=ReviewScope(contractType=contract_type, jurisdiction=jurisdiction,
+                                  businessScenario=business_scenario, effectiveScope=effective_scope),
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="playbook version not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    else:
+        if jurisdiction != "CN" or business_scenario != "general":
+            raise HTTPException(status_code=422, detail="select a published playbook for this jurisdiction or scenario")
+        try:
+            snapshot = built_in_playbook_snapshot(contract_type, tenant_id=principal.tenant_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid contract type") from exc
+    task = review_run_store.create_run(
+        contract_type=contract_type, tenant_id=principal.tenant_id, playbook_snapshot=snapshot, input_text=content,
+    )
     task_id = task["id"]
-    threading.Thread(target=_run, args=(task_id, content, contract_type), daemon=True).start()
+    _task_queue().enqueue(task_id, kind="review", tenant_id=principal.tenant_id, payload={"runId": task_id})
+    threading.Thread(target=_execute_review_task, args=(task_id, content, contract_type, principal.tenant_id), daemon=True).start()
     return {"taskId": task_id, "status": "running"}
 
 
 @app.get("/report/{task_id}")
-def report(task_id: str) -> dict:
+def report(task_id: str, principal: Principal = Depends(current_principal)) -> dict:
     """轮询任务结果（报告 JSON）。"""
     task = review_run_store.get_run(task_id)
-    if task is None:
+    if task is None or task["tenantId"] != principal.tenant_id:
         raise HTTPException(status_code=404, detail="task not found")
 
     # 人工裁决属于审查运行的附加事实，读取时叠加到原始报告，避免改写
@@ -332,18 +661,14 @@ def report(task_id: str) -> dict:
     if task.get("report"):
         task = copy.deepcopy(task)
         task["report"].setdefault("meta", {}).setdefault("stageTimes", task.get("stageTimes", [0, 0, 0, 0]))
-        dispositions = review_run_store.get_dispositions(task_id)
-        for risk in task["report"].get("risks", []):
-            disposition = dispositions.get(risk.get("id"))
-            if disposition:
-                risk["reviewStatus"] = disposition["decision"]
-                risk["reviewDecision"] = disposition
+        task["report"] = normalize_report(task["report"], dispositions=review_run_store.get_dispositions(task_id))
     return task
 
 
 @app.get("/review-runs/{task_id}/events")
-def review_run_events(task_id: str, after_id: int = 0) -> dict:
-    if review_run_store.get_run(task_id) is None:
+def review_run_events(task_id: str, after_id: int = 0, principal: Principal = Depends(current_principal)) -> dict:
+    task = review_run_store.get_run(task_id)
+    if task is None or task["tenantId"] != principal.tenant_id:
         raise HTTPException(status_code=404, detail="task not found")
     return {"events": review_run_store.list_events(task_id, after_id=after_id)}
 
@@ -358,10 +683,35 @@ def review_history(
     return {"runs": review_run_store.list_runs(tenant_id=principal.tenant_id, status=status, limit=limit)}
 
 
-@app.post("/review-runs/{task_id}/findings/{finding_id}/disposition")
-def set_finding_disposition(task_id: str, finding_id: str, req: FindingDispositionReq) -> dict:
+@app.post("/review-runs/{task_id}/cancel")
+def cancel_review_run(task_id: str, req: CancelRunReq, principal: Principal = Depends(current_principal)) -> dict:
+    task = review_run_store.get_run(task_id)
+    if task is None or task["tenantId"] != principal.tenant_id:
+        raise HTTPException(status_code=404, detail="task not found")
     try:
-        return review_run_store.set_disposition(task_id, finding_id, req.decision, req.reason)
+        ApiKeyAuthenticator.require_role(principal, "admin", "legal_reviewer", "requester")
+        result = review_run_store.cancel_run(task_id, reason=req.reason, actor=principal.subject)
+        _task_queue().cancel(task_id, tenant_id=principal.tenant_id)
+        return result
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/review-runs/{task_id}/findings/{finding_id}/disposition")
+def set_finding_disposition(task_id: str, finding_id: str, req: FindingDispositionReq, principal: Principal = Depends(current_principal)) -> dict:
+    task = review_run_store.get_run(task_id)
+    if task is None or task["tenantId"] != principal.tenant_id:
+        raise HTTPException(status_code=404, detail="task not found")
+    try:
+        ApiKeyAuthenticator.require_role(principal, "admin", "legal_reviewer")
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    if not any(r.get("id") == finding_id for r in (task.get("report") or {}).get("risks", [])):
+        raise HTTPException(status_code=404, detail="finding not found")
+    try:
+        return review_run_store.set_disposition(task_id, finding_id, req.decision, req.reason, actor=principal.subject)
     except KeyError:
         raise HTTPException(status_code=404, detail="task not found")
     except ValueError as exc:
@@ -375,44 +725,12 @@ def record_feedback(task_id: str, finding_id: str, req: FeedbackReq, principal: 
     return {"ok": True}
 
 
-def _run(task_id: str, content: str, contract_type: str) -> None:
-    with _pipeline_semaphore:  # 排队执行（超出并发上限的任务等待，不拒绝）
-        try:
-            start = time.time()
-            stage_starts: dict[int, float] = {}
-
-            def _progress(stage: int, status: str, detail: str = "") -> None:
-                """流水线真实进度 → 持久化 ReviewRun。"""
-                now_ms = time.time() * 1000
-                current = review_run_store.get_run(task_id)
-                if current is None or current.get("status") not in {"queued", "running"}:
-                    return
-                times = current["stageTimes"]
-                if status == "running":
-                    stage_starts.setdefault(stage, now_ms)
-                    review_run_store.update_progress(task_id, stage=stage, status="running", detail=detail, stage_times=times)
-                else:
-                    started = stage_starts.get(stage, now_ms)
-                    times[stage] = int(now_ms - started)
-                    review_run_store.update_progress(task_id, stage=stage, status="done", detail=detail, stage_times=times)
-
-            r = run_pipeline(
-                content,
-                contract_type=contract_type,
-                contract_name=task_id,
-                progress=_progress,
-            )
-            current = review_run_store.get_run(task_id) or {}
-            review_run_store.complete_run(
-                task_id, r, elapsed_ms=int((time.time() - start) * 1000), stage_times=current.get("stageTimes", [0, 0, 0, 0])
-            )
-        except BalanceError as e:  # 余额耗尽：显式标记，前端弹"停止服务"提示（不出现空报告跳转）
-            logger.error("任务 %s 因 API 余额不足失败", task_id)
-            review_run_store.fail_run(task_id, f"API 供应商停止服务：{e}", balance_exhausted=True)
-        except Exception as e:  # 部分成功原则：单任务失败不崩服务
-            logger.exception("流水线任务 %s 失败", task_id)
-            review_run_store.fail_run(task_id, str(e))
-
+def _execute_review_task(task_id: str, content: str, contract_type: str, tenant_id: str = "local") -> None:
+    execute_review_task(
+        task_id, content, contract_type, tenant_id,
+        queue_factory=_task_queue, run_store=review_run_store, pipeline=run_pipeline,
+        semaphore=_pipeline_semaphore, schedule_heartbeat=_schedule_lease_heartbeat, logger=logger,
+    )
 
 @app.get("/{spa_path:path}", include_in_schema=False)
 def frontend(spa_path: str) -> Response:

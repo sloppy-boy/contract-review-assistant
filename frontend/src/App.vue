@@ -67,6 +67,9 @@
         </div>
       </template>
       <HistoryView v-show="activeTab === 'history'" @open-run="openHistoryRun" />
+      <CollaborationView v-if="activeTab === 'collaboration'" />
+      <AssetsView v-if="activeTab === 'assets'" @review="reviewAsset" />
+      <PlaybooksView v-if="activeTab === 'playbooks'" />
       <EvalBoard v-show="activeTab === 'eval'" />
       <SettingsView v-show="activeTab === 'settings'" />
     </main>
@@ -87,17 +90,29 @@ import ReportDetail from './views/ReportDetail.vue'
 import EvalBoard from './views/EvalBoard.vue'
 import SettingsView from './views/SettingsView.vue'
 import HistoryView from './views/HistoryView.vue'
+import CollaborationView from './views/CollaborationView.vue'
+import AssetsView from './views/AssetsView.vue'
+import PlaybooksView from './views/PlaybooksView.vue'
 
 const tabs = [
   { key: 'workbench', label: '工作台', icon: '🛠' },
   { key: 'report', label: '报告详情', icon: '📋' },
   { key: 'history', label: '历史记录', icon: '◷' },
+  { key: 'collaboration', label: '审查协作' },
+  { key: 'assets', label: '合同资产' },
+  { key: 'playbooks', label: 'Playbook' },
   { key: 'eval', label: '评测对比', icon: '📊' },
   { key: 'settings', label: '设置', icon: '⚙️' },
 ]
 const activeTab = ref('workbench')
 const openReport = () => { activeTab.value = 'report' }
 const frontVersion = FRONT_VERSION
+
+function reviewAsset(asset) {
+  if (store.running) { ElMessage.warning('请等待当前审查完成后载入合同'); return }
+  store.assetDraft = { id: asset.id, text: asset.text, filename: asset.filename }
+  activeTab.value = 'workbench'
+}
 
 async function openHistoryRun(run) {
   const task = await fetchReviewRun(run.id)

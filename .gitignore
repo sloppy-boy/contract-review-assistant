@@ -19,6 +19,8 @@ data/review_runs.db
 data/review_runs.db-*
 data/feedback.db
 data/traces.db
+data/*.db
+data/*.db-*
 
 # 前端
 node_modules/

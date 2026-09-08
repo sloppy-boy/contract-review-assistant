@@ -10,7 +10,7 @@ findings 通道带自定义 reducer（见 findings_reducer）：
 from __future__ import annotations
 
 from operator import add
-from typing import Annotated, Literal, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -54,6 +54,14 @@ class Finding(BaseModel):
     evidence: str = Field(description="引用的 clauseFacts 依据（哪条事实/关键数值支撑判断）")
     suggestion: str = Field(description="修改建议")
     suggestionClauseText: str = Field(default="", description="可直接替换的示范条款")
+    location: str = ""
+    paragraphId: str = ""
+    source: Literal["model", "playbook", "rule"] = "model"
+    sourceDetails: dict[str, Any] = Field(default_factory=dict)
+    sources: list[dict[str, Any]] = Field(default_factory=list)
+    confidence: float | None = Field(default=None, ge=0, le=1, description="来源明确提供的置信度；未知为null，不推算")
+    requiresHumanReview: bool = False
+    escalationRecommendation: str = ""
     status: Status = "proposed"
     rejectReason: str = Field(default="", description="复核驳回理由（status=rejected 时）")
     reVerifyJustification: str = Field(default="", description="重证后坚持的理由（status=disputed 时）")
@@ -110,6 +118,11 @@ class ContractState(TypedDict, total=False):
     contract_text: str
     contract_type: str                     # purchase | sale
     contract_name: str
+    # 审查运行创建时冻结的 Playbook 版本快照；本切片仅传递溯源信息，
+    # worker 规则执行仍使用现有风险矩阵。
+    playbook_snapshot: dict[str, Any]
+    playbook_findings: list[dict[str, Any]]
+    playbook_execution: dict[str, Any]
     # 黑板
     clauses: list[ClauseFact]
     findings: Annotated[list[Finding], findings_reducer]
@@ -132,6 +145,9 @@ class RiskItemOut(BaseModel):
     evidence: str
     suggestion: str
     suggestionClauseText: str = ""
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    requiresHumanReview: bool = False
+    escalationRecommendation: str = ""
 
 
 class ReportOut(BaseModel):

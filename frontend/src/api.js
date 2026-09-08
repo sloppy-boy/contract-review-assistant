@@ -10,6 +10,7 @@ export const store = reactive({
   reviewRunId: null,       // 在线审查的持久化运行 ID；人工裁决与审计事件的锚点
   contractName: '',
   contractType: 'purchase',
+  assetDraft: null,
   running: false,
   stage: 0,                // 流水线阶段 0~3（后端真实进度）
   stageStatus: 'idle',     // idle | running | done（后端回传）
@@ -30,7 +31,7 @@ export function saveWorkspaceApiKey(value) {
   else localStorage.removeItem('cra_workspace_api_key')
 }
 
-function apiFetch(path, options = {}) {
+export function apiFetch(path, options = {}) {
   const headers = new Headers(options.headers || {})
   if (store.workspaceApiKey) headers.set('X-API-Key', store.workspaceApiKey)
   return fetch(path, { ...options, headers })
@@ -92,11 +93,19 @@ async function pollReview(taskId, onProgress) {
   }
 }
 
-export async function uploadAndReview(text, contractType, onProgress, onTaskCreated) {
+export async function uploadAndReview(text, contractType, onProgress, onTaskCreated, playbook = null) {
+  const fields = { text, contract_type: contractType }
+  if (playbook?.playbookId && playbook?.version) {
+    fields.playbook_id = playbook.playbookId
+    fields.playbook_version = String(playbook.version)
+    fields.jurisdiction = playbook.content?.jurisdiction || 'CN'
+    fields.business_scenario = playbook.content?.businessScenario || 'general'
+    fields.effective_scope = playbook.content?.effectiveScope?.[0] || '*'
+  }
   const resp = await apiFetch('/api/upload', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ text, contract_type: contractType }),
+    body: new URLSearchParams(fields),
   })
   if (!resp.ok) {
     const data = await resp.json().catch(() => ({}))
@@ -106,6 +115,13 @@ export async function uploadAndReview(text, contractType, onProgress, onTaskCrea
   const { taskId } = await resp.json()
   onTaskCreated?.(taskId)
   return pollReview(taskId, onProgress)
+}
+
+export async function fetchPlaybooks(contractType = '') {
+  const resp = await apiFetch('/api/playbooks?activeOnly=true')
+  if (!resp.ok) throw new Error('Playbook 列表读取失败')
+  const books = (await resp.json()).playbooks || []
+  return books.filter(book => book.status === 'active' && (!contractType || book.content?.contractType === contractType))
 }
 
 export function resumeReview(taskId, onProgress) {

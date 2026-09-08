@@ -39,10 +39,17 @@
         />
         <!-- 设置行：类型 + 开始 -->
         <div class="setting-row">
-          <el-radio-group v-model="store.contractType" size="default">
-            <el-radio-button value="purchase">采购合同</el-radio-button>
-            <el-radio-button value="sale">销售合同</el-radio-button>
-          </el-radio-group>
+            <el-radio-group v-model="store.contractType" size="default">
+              <el-radio-button value="purchase">采购合同</el-radio-button>
+              <el-radio-button value="sale">销售合同</el-radio-button>
+            </el-radio-group>
+          <select v-model="selectedPlaybook" class="playbook-select" :disabled="store.running" aria-label="审查 Playbook">
+            <option value="">内置审查基线</option>
+            <option v-for="book in playbooks" :key="`${book.playbookId}:${book.version}`" :value="`${book.playbookId}:${book.version}`">{{ book.content?.name }} · v{{ book.version }}</option>
+          </select>
+          <select v-model="selectedJurisdiction" class="context-select" :disabled="store.running" aria-label="法域"><option v-for="item in jurisdictions" :key="item" :value="item">{{ item }} 法域</option></select>
+          <select v-model="selectedScenario" class="context-select" :disabled="store.running" aria-label="业务场景"><option v-for="item in scenarios" :key="item" :value="item">{{ item }} 场景</option></select>
+          <select v-model="selectedScope" class="context-select" :disabled="store.running" aria-label="生效范围"><option v-for="item in scopes" :key="item" :value="item">{{ item }} 范围</option></select>
           <el-button type="primary" class="start-btn" :loading="store.running" @click="reviewText">
              开始审查
           </el-button>
@@ -92,7 +99,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { store, DEMO_CONTRACTS, STAGES, loadDemoReport, resumeReview, saveWorkspaceApiKey, uploadAndReview } from '../api.js'
+import { store, DEMO_CONTRACTS, STAGES, fetchPlaybooks, loadDemoReport, resumeReview, saveWorkspaceApiKey, uploadAndReview } from '../api.js'
 
 const emit = defineEmits(['open-report'])
 const error = ref('')
@@ -101,6 +108,30 @@ const text = ref('')
 const workspaceApiKey = ref(store.workspaceApiKey)
 const persistWorkspaceApiKey = () => saveWorkspaceApiKey(workspaceApiKey.value)
 const pasteText = ref('')
+const playbooks = ref([])
+const selectedPlaybook = ref('')
+const selectedPlaybookObject = computed(() => playbooks.value.find(book => `${book.playbookId}:${book.version}` === selectedPlaybook.value) || null)
+const selectedJurisdiction = ref('CN'), selectedScenario = ref('general'), selectedScope = ref('*')
+const jurisdictions = computed(() => [...new Set(['CN', ...playbooks.value.map(book => book.content?.jurisdiction).filter(Boolean)])])
+const scenarios = computed(() => [...new Set(['general', ...playbooks.value.map(book => book.content?.businessScenario).filter(Boolean)])])
+const scopes = computed(() => [...new Set(['*', ...playbooks.value.flatMap(book => book.content?.effectiveScope || []).filter(Boolean)])])
+const reviewPlaybook = computed(() => {
+  const book = selectedPlaybookObject.value
+  if (!book) return null
+  return { ...book, content: { ...book.content, jurisdiction: selectedJurisdiction.value, businessScenario: selectedScenario.value, effectiveScope: [selectedScope.value] } }
+})
+watch(selectedPlaybookObject, (book) => {
+  selectedJurisdiction.value = book?.content?.jurisdiction || 'CN'
+  selectedScenario.value = book?.content?.businessScenario || 'general'
+  selectedScope.value = book?.content?.effectiveScope?.[0] || '*'
+})
+watch(() => store.assetDraft, (asset) => {
+  if (!asset) return
+  text.value = asset.text; pasteText.value = ''; fileName.value = asset.filename
+})
+watch(() => store.workspaceApiKey, () => {
+  if (store.assetDraft) { text.value = ''; pasteText.value = ''; fileName.value = ''; store.assetDraft = null }
+})
 const ACTIVE_RUN_KEY = 'cra_active_review_run'
 
 const DEMO_CARDS = [
@@ -180,13 +211,22 @@ function onDrop(e) {
   handleFile(e.dataTransfer?.files?.[0])
 }
 
-onMounted(() => {
+async function loadAvailablePlaybooks() {
+  if (store.mode !== 'online') return
+  try {
+    playbooks.value = await fetchPlaybooks(store.contractType)
+    if (!playbooks.value.some(book => `${book.playbookId}:${book.version}` === selectedPlaybook.value)) selectedPlaybook.value = ''
+  } catch { playbooks.value = []; selectedPlaybook.value = '' }
+}
+watch(() => store.contractType, loadAvailablePlaybooks)
+onMounted(async () => {
   document.addEventListener('dragover', onDragOver)
   document.addEventListener('drop', onDrop)
   const saved = localStorage.getItem(ACTIVE_RUN_KEY)
   if (saved && store.mode === 'online') {
     try { resumePersistedReview(JSON.parse(saved)) } catch { localStorage.removeItem(ACTIVE_RUN_KEY) }
   }
+  await loadAvailablePlaybooks()
 })
 onUnmounted(() => {
   document.removeEventListener('dragover', onDragOver)
@@ -232,7 +272,7 @@ async function reviewText() {
     const contractName = fileName.value || (pasteText.value.trim() ? '粘贴合同' : '上传合同')
     const result = await uploadAndReview(content, store.contractType, applyProgress, (taskId) => {
       localStorage.setItem(ACTIVE_RUN_KEY, JSON.stringify({ taskId, contractName }))
-    })
+    }, reviewPlaybook.value)
     finishReview(result, contractName)
   } catch (e) {
     // 余额耗尽：任务失败携带 balanceExhausted → 弹"停止服务"提示（不再莫名跳空报告）
@@ -340,6 +380,7 @@ async function loadDemo(id) {
 
 /* 设置行（上传卡片底部）：类型 + 开始 内联 */
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
+.context-select,.playbook-select { min-width: 112px; border: 1px solid var(--line); border-radius: 5px; padding: 8px; background: #fff; color: var(--ink-2); }
 .start-btn { margin: 0; }
 .pipe-desc { margin-top: 10px; font-size: 11px; color: var(--ink-3); line-height: 1.6; }
 

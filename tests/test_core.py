@@ -71,6 +71,184 @@ class TestReviewRuns:
 
         assert restored["balanceExhausted"] is True
 
+    def test_cancelled_run_is_terminal_and_records_reason(self, tmp_path):
+        store = ReviewRunStore(tmp_path / "review_runs.db")
+        run = store.create_run(contract_type="purchase")
+        cancelled = store.cancel_run(run["id"], reason="重复提交", actor="alice")
+        assert cancelled["status"] == "cancelled"
+        assert store.cancel_run(run["id"], reason="再次取消", actor="alice")["status"] == "cancelled"
+        events = store.list_events(run["id"])
+        assert events[-1]["type"] == "cancelled"
+        assert events[-1]["data"]["reason"] == "重复提交"
+
+    def test_cancelled_run_cannot_be_resurrected_by_late_progress_or_completion(self, tmp_path):
+        store = ReviewRunStore(tmp_path / "review_runs.db")
+        run = store.create_run(contract_type="purchase")
+        store.cancel_run(run["id"], reason="用户撤回", actor="alice")
+
+        assert store.update_progress(run["id"], stage=1, status="running", detail="late")["status"] == "cancelled"
+        assert store.complete_run(run["id"], {"risks": [{"id": "late"}]}, elapsed_ms=1, stage_times=[1, 1, 1, 1])["status"] == "cancelled"
+        restored = store.get_run(run["id"])
+        assert restored["status"] == "cancelled" and "report" not in restored
+        assert [event["type"] for event in store.list_events(run["id"])] == ["created", "cancelled"]
+
+    def test_terminal_run_rejects_late_failure_and_cancellation_events(self, tmp_path, monkeypatch):
+        path = tmp_path / "review_runs.db"
+        store = ReviewRunStore(path)
+        completed = store.create_run(contract_type="purchase")
+        store.complete_run(completed["id"], {"meta": {}}, elapsed_ms=1, stage_times=[0, 0, 0, 0])
+        assert store.fail_run(completed["id"], "late failure")["status"] == "done"
+        assert [event["type"] for event in store.list_events(completed["id"])] == ["created", "completed"]
+
+        cancelled = store.create_run(contract_type="purchase")
+        store.cancel_run(cancelled["id"], reason="user cancel")
+        assert store.fail_run(cancelled["id"], "late failure")["status"] == "cancelled"
+        assert [event["type"] for event in store.list_events(cancelled["id"])] == ["created", "cancelled"]
+
+        racing = store.create_run(contract_type="purchase")
+        original_get = store.get_run
+        raced = False
+
+        def stale_then_complete(run_id):
+            nonlocal raced
+            current = original_get(run_id)
+            if run_id == racing["id"] and not raced:
+                raced = True
+                ReviewRunStore(path).complete_run(run_id, {"meta": {}}, elapsed_ms=1, stage_times=[0, 0, 0, 0])
+                return {**current, "status": "running"}
+            return current
+
+        monkeypatch.setattr(store, "get_run", stale_then_complete)
+        assert store.cancel_run(racing["id"], reason="late cancel")["status"] == "done"
+        assert [event["type"] for event in store.list_events(racing["id"])] == ["created", "completed"]
+
+    def test_cancel_endpoint_is_tenant_scoped_and_stops_queued_run(self, monkeypatch, tmp_path):
+        from fastapi.testclient import TestClient
+        from app import api as api_mod
+
+        store = ReviewRunStore(tmp_path / "review_runs.db")
+        monkeypatch.setattr(api_mod, "review_run_store", store, raising=False)
+        run = store.create_run(contract_type="purchase")
+        response = TestClient(api_mod.app).post(f"/review-runs/{run['id']}/cancel", json={"reason": "用户撤回"})
+        assert response.status_code == 200
+        assert response.json()["status"] == "cancelled"
+
+    def test_review_run_retention_candidates_exclude_active_runs_and_purge_metadata(self, tmp_path):
+        store = ReviewRunStore(tmp_path / "review_runs.db")
+        old = store.create_run(contract_type="purchase")
+        store.complete_run(old["id"], {"meta": {}}, elapsed_ms=1, stage_times=[0, 0, 0, 0])
+        active = store.create_run(contract_type="purchase")
+        candidates = store.retention_candidates(tenant_id="local", before="2999-01-01T00:00:00+00:00")
+        assert [item["resourceId"] for item in candidates] == [old["id"]]
+        assert store.purge_run(old["id"], tenant_id="local") is True
+        assert store.get_run(old["id"]) is None and store.get_run(active["id"]) is not None
+
+    def test_run_retries_provider_failure_then_records_dead_letter(self, monkeypatch, tmp_path):
+        from app import api as api_mod
+        from app.task_queue import TaskQueue
+
+        store = ReviewRunStore(tmp_path / "review_runs.db")
+        monkeypatch.setattr(api_mod, "review_run_store", store, raising=False)
+        run = store.create_run(contract_type="purchase")
+        TaskQueue(tmp_path / "tasks.db").enqueue(run["id"], kind="review", payload={"runId": run["id"]})
+        monkeypatch.setattr(api_mod, "run_pipeline", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("provider timeout")))
+        api_mod._execute_review_task(run["id"], "synthetic contract", "purchase")
+        assert store.get_run(run["id"])["status"] == "failed"
+        dead = TaskQueue(tmp_path / "tasks.db").get(run["id"])
+        assert dead["status"] == "dead" and dead["attempts"] == 3
+
+    def test_queue_operations_are_admin_only_and_can_retry_dead_letters(self, monkeypatch, tmp_path):
+        from fastapi.testclient import TestClient
+        from app import api as api_mod
+        from app.security import ApiKeyAuthenticator
+        from app.task_queue import TaskQueue
+
+        monkeypatch.setattr(api_mod, "review_run_store", ReviewRunStore(tmp_path / "review_runs.db"), raising=False)
+        monkeypatch.setattr(api_mod, "authenticator", ApiKeyAuthenticator(environment="production", keys={
+            "admin-key": {"subject": "alice", "tenantId": "acme", "role": "admin"},
+            "reader-key": {"subject": "reader", "tenantId": "acme", "role": "reader"},
+        }))
+        queue = TaskQueue(tmp_path / "tasks.db")
+        queue.enqueue("dead-1", kind="review", tenant_id="acme", payload={"runId": "dead-1"}, max_attempts=1)
+        queue.claim("worker")
+        queue.fail("dead-1", "provider down")
+        queue.enqueue("stale-1", kind="review", tenant_id="acme", payload={"runId": "stale-1"}, now="2020-01-01T00:00:00+00:00")
+        queue.claim("lost-worker", now="2020-01-01T00:00:00+00:00")
+        queue.enqueue("other-1", kind="review", tenant_id="other", payload={"runId": "other-1"})
+        client = TestClient(api_mod.app)
+        client.headers["X-API-Key"] = "admin-key"
+        listed = client.get("/platform/tasks", params={"status": "dead", "kind": "review"})
+        assert listed.status_code == 200 and listed.json()["tasks"][0]["id"] == "dead-1"
+        retried = client.post("/platform/tasks/dead-1/retry")
+        assert retried.status_code == 200 and retried.json()["status"] == "queued"
+        recovered = client.post("/platform/tasks/requeue-stale", params={"lease_seconds": 300})
+        assert recovered.status_code == 200 and recovered.json()["requeued"] == ["stale-1"]
+        assert all(item["id"] != "other-1" for item in client.get("/platform/tasks").json()["tasks"])
+        assert client.get("/platform/tasks/other-1").status_code == 404
+        client.headers["X-API-Key"] = "reader-key"
+        assert client.get("/platform/tasks").status_code == 403
+        assert client.post("/platform/tasks/dead-1/retry").status_code == 403
+
+    def test_lifecycle_api_covers_collaboration_and_archived_playbook_versions(self, monkeypatch, tmp_path):
+        from fastapi.testclient import TestClient
+        from app import api as api_mod
+        from app.collaboration import CollaborationStore, RequestContent
+        from app.data_lifecycle import DataLifecycleStore
+        from app.playbook_store import PlaybookStore
+        from app.security import ApiKeyAuthenticator, Principal
+
+        monkeypatch.setattr(api_mod, "review_run_store", ReviewRunStore(tmp_path / "runs.db"), raising=False)
+        monkeypatch.setattr(api_mod, "playbook_store", PlaybookStore(tmp_path / "books.db"), raising=False)
+        monkeypatch.setattr(api_mod, "collaboration_store", CollaborationStore(tmp_path / "collaboration.db"), raising=False)
+        monkeypatch.setattr(api_mod, "lifecycle_store", DataLifecycleStore(tmp_path / "lifecycle.db"), raising=False)
+        monkeypatch.setattr(api_mod, "authenticator", ApiKeyAuthenticator(environment="production", keys={
+            "admin-key": {"subject": "alice", "tenantId": "acme", "role": "admin"},
+        }))
+        book_content = {"name": "标准", "contractType": "purchase", "jurisdiction": "CN", "businessScenario": "general", "effectiveScope": ["*"], "rules": [{"id": "r1", "riskType": "付款", "severity": "medium", "triggerCondition": "付款", "reviewQuestion": "是否明确", "acceptableCondition": "明确", "suggestedClause": "明确付款", "escalationPolicy": "法务确认"}]}
+        store = api_mod.playbook_store
+        book = store.create_draft(__import__("app.playbooks", fromlist=["PlaybookContent"]).PlaybookContent.model_validate(book_content), tenant_id="acme", subject="alice")
+        store.publish(book["playbookId"], 1, tenant_id="acme", subject="alice")
+        store.archive(book["playbookId"], 1, tenant_id="acme", subject="alice")
+        collab = api_mod.collaboration_store.create(RequestContent(title="采购审查", contractType="purchase"), actor=Principal("alice", "acme", "admin"))
+        collab = api_mod.collaboration_store.cancel(collab["id"], actor=Principal("alice", "acme", "admin"), expected_revision=1, reason="撤回")
+        client = TestClient(api_mod.app)
+        client.headers["X-API-Key"] = "admin-key"
+        pb_resource = f"{book['playbookId']}:1"
+        assert client.post("/platform/legal-holds", json={"resourceType": "playbook_version", "resourceId": pb_resource, "reason": "诉讼保全"}).status_code == 200
+        assert client.post("/platform/legal-holds", json={"resourceType": "collaboration_request", "resourceId": collab["id"], "reason": "审计保留"}).status_code == 200
+        purge = client.post("/platform/data-lifecycle/purge", json={"resourceType": "playbook_version", "before": "2999-01-01T00:00:00+00:00", "dryRun": False})
+        assert purge.status_code == 200 and purge.json()["held"] == [pb_resource]
+        assert client.delete(f"/platform/legal-holds/playbook_version/{pb_resource}").status_code == 200
+        purge = client.post("/platform/data-lifecycle/purge", json={"resourceType": "playbook_version", "before": "2999-01-01T00:00:00+00:00", "dryRun": False})
+        assert purge.json()["deleted"] == [pb_resource]
+        assert client.get(f"/playbooks/{book['playbookId']}/versions/1").status_code == 404
+
+    def test_integration_config_api_is_admin_scoped_and_secret_free(self, monkeypatch, tmp_path):
+        from fastapi.testclient import TestClient
+        from app import api as api_mod
+        from app.security import ApiKeyAuthenticator
+        from app.workflow_automation import IntegrationConfigStore
+
+        monkeypatch.setattr(api_mod, "integration_store", IntegrationConfigStore(tmp_path / "integrations.db"), raising=False)
+        monkeypatch.setattr(api_mod, "authenticator", ApiKeyAuthenticator(environment="production", keys={
+            "acme-admin": {"subject": "alice", "tenantId": "acme", "role": "admin"},
+            "other-admin": {"subject": "bob", "tenantId": "other", "role": "admin"},
+            "acme-reader": {"subject": "reader", "tenantId": "acme", "role": "reader"},
+        }))
+        client = TestClient(api_mod.app, headers={"X-API-Key": "acme-admin"})
+        response = client.put("/platform/integrations/enterprise_im", json={
+            "integrationKind": "enterprise_im", "url": "https://hooks.example.com/events",
+            "allowedHosts": ["hooks.example.com"], "secret": "test-secret", "enabled": False,
+        })
+        assert response.status_code == 200 and response.json()["hasSecret"] is True
+        assert "test-secret" not in response.text
+        assert client.get("/platform/integrations").json()["integrations"][0]["enabled"] is False
+        assert client.get("/platform/integrations/deliveries").json()["deliveries"] == []
+        client.headers["X-API-Key"] = "other-admin"
+        assert client.get("/platform/integrations").json()["integrations"] == []
+        client.headers["X-API-Key"] = "acme-reader"
+        assert client.get("/platform/integrations").status_code == 403
+
     def test_report_endpoint_reads_a_persisted_failed_run(self, monkeypatch, tmp_path):
         """报告接口读取持久化失败状态，而不是进程内 TASKS 字典。"""
         from fastapi.testclient import TestClient
@@ -106,6 +284,7 @@ class TestReviewRuns:
         store = ReviewRunStore(tmp_path / "review_runs.db")
         monkeypatch.setattr(api_mod, "review_run_store", store, raising=False)
         run = store.create_run(contract_type="purchase")
+        store.complete_run(run["id"], {"risks": [{"id": "finding-1"}]}, elapsed_ms=1, stage_times=[1, 0, 0, 0])
         response = TestClient(api_mod.app).post(
             f"/review-runs/{run['id']}/findings/finding-1/disposition",
             json={"decision": "accepted", "reason": "证据充分"},

@@ -1,0 +1,5 @@
+[
+  {"query": "付款期限", "relevant": ["article-payment"], "results": [{"id": "article-payment"}]},
+  {"query": "违约金", "relevant": ["article-penalty"], "results": [{"id": "article-penalty"}]},
+  {"query": "保密义务", "relevant": ["article-confidentiality"], "results": [{"id": "article-confidentiality"}]}
+]
