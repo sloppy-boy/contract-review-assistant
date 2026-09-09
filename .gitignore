@@ -48,3 +48,4 @@ Thumbs.db
 scripts/_test_export*
 
 .worktrees/
+release.tar
