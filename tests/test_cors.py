@@ -3,7 +3,9 @@ from fastapi.testclient import TestClient
 
 def test_configured_frontend_origin_is_allowed(monkeypatch):
     monkeypatch.setenv("CORS_ORIGINS", "https://frontend.example.test")
+    import importlib
     from app import api
+    importlib.reload(api)
 
     response = TestClient(api.app).get("/health", headers={"Origin": "https://frontend.example.test"})
     assert response.status_code == 200
