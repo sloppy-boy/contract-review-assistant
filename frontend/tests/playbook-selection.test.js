@@ -7,6 +7,7 @@ test('Playbook selection is sent with an explicit immutable version', async () =
   const originalFetch = global.fetch
   global.fetch = async (url, options = {}) => {
     calls.push({ url, options })
+    if (String(url).includes('/visitor/session')) return new Response(JSON.stringify({ token: 'visitor-token', role: 'visitor' }), { status: 200 })
     if (String(url).includes('/playbooks')) return new Response(JSON.stringify({ playbooks: [{ playbookId: 'p1', version: 2, status: 'active', content: { contractType: 'purchase', jurisdiction: 'CN', businessScenario: 'general', effectiveScope: ['procurement'] } }, { playbookId: 'p2', version: 1, status: 'draft', content: { contractType: 'purchase' } }] }), { status: 200 })
     if (String(url).includes('/report/')) return new Response(JSON.stringify({ status: 'done', report: { risks: [] } }), { status: 200 })
     return new Response(JSON.stringify({ taskId: 'run-1' }), { status: 200 })
@@ -17,7 +18,8 @@ test('Playbook selection is sent with an explicit immutable version', async () =
     assert.deepEqual(books.map(item => item.playbookId), ['p1'])
     const promise = api.uploadAndReview('合同文本', 'purchase', undefined, undefined, books[0])
     await promise
-    const body = new URLSearchParams(calls[1].options.body)
+    const uploadCall = calls.find(call => String(call.url).endsWith('/api/upload'))
+    const body = new URLSearchParams(uploadCall.options.body)
     assert.equal(body.get('playbook_id'), 'p1')
     assert.equal(body.get('playbook_version'), '2')
     assert.equal(body.get('effective_scope'), 'procurement')

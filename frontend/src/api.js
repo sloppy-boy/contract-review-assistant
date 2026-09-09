@@ -25,6 +25,8 @@ export const store = reactive({
   balanceThreshold: 5,     // 预警阈值（元，后端下发）
   balanceQueryFailed: false,
   workspaceApiKey: localStorage.getItem('cra_workspace_api_key') || '',
+  visitorToken: localStorage.getItem('cra_visitor_token') || '',
+  principalRole: localStorage.getItem('cra_workspace_api_key') ? 'admin' : 'visitor',
 })
 
 export function saveWorkspaceApiKey(value) {
@@ -33,11 +35,39 @@ export function saveWorkspaceApiKey(value) {
   else localStorage.removeItem('cra_workspace_api_key')
 }
 
-export function apiFetch(path, options = {}) {
+let visitorSessionPromise = null
+
+export async function ensureVisitorSession({ force = false } = {}) {
+  if (store.workspaceApiKey) return null
+  if (!force && store.visitorToken) return store.visitorToken
+  if (!visitorSessionPromise) {
+    visitorSessionPromise = fetch(`${API_BASE_URL}/api/visitor/session`, { method: 'POST' })
+      .then(async (response) => {
+        if (!response.ok) throw new Error('访客会话初始化失败，请稍后刷新页面重试')
+        const session = await response.json()
+        store.visitorToken = session.token
+        store.principalRole = session.role || 'visitor'
+        localStorage.setItem('cra_visitor_token', session.token)
+        return session.token
+      })
+      .finally(() => { visitorSessionPromise = null })
+  }
+  return visitorSessionPromise
+}
+
+export async function apiFetch(path, options = {}) {
+  const isPublicProbe = path === '/api/health' || path === '/api/visitor/session'
+  if (!store.workspaceApiKey && !isPublicProbe) await ensureVisitorSession()
   const headers = new Headers(options.headers || {})
   if (store.workspaceApiKey) headers.set('X-API-Key', store.workspaceApiKey)
+  else if (store.visitorToken) headers.set('Authorization', `Bearer ${store.visitorToken}`)
   const url = path.startsWith('http') ? path : `${API_BASE_URL}${path}`
-  return fetch(url, { ...options, headers })
+  const response = await fetch(url, { ...options, headers })
+  if (response.status !== 401 || store.workspaceApiKey || isPublicProbe || options.__visitorRetried) return response
+  store.visitorToken = ''
+  localStorage.removeItem('cra_visitor_token')
+  await ensureVisitorSession({ force: true })
+  return apiFetch(path, { ...options, __visitorRetried: true })
 }
 
 export const STAGES = ['条款抽取', '风险识别（13 workers 并行）', '对抗复核', '报告生成']

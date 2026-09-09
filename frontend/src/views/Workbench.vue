@@ -27,16 +27,6 @@
           placeholder="或直接粘贴合同文本（纯文本，支持中文）…"
           :disabled="store.running"
         />
-        <el-input
-          v-if="store.mode === 'online'"
-          v-model="workspaceApiKey"
-          type="password"
-          show-password
-          clearable
-          class="workspace-key"
-          placeholder="工作区访问密钥（生产环境必填）"
-          @input="persistWorkspaceApiKey"
-        />
         <!-- 设置行：类型 + 开始 -->
         <div class="setting-row">
             <el-radio-group v-model="store.contractType" size="default">
@@ -99,14 +89,12 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { store, DEMO_CONTRACTS, STAGES, fetchPlaybooks, loadDemoReport, resumeReview, saveWorkspaceApiKey, uploadAndReview } from '../api.js'
+import { store, DEMO_CONTRACTS, STAGES, fetchPlaybooks, loadDemoReport, resumeReview, uploadAndReview } from '../api.js'
 
 const emit = defineEmits(['open-report'])
 const error = ref('')
 const fileName = ref('')
 const text = ref('')
-const workspaceApiKey = ref(store.workspaceApiKey)
-const persistWorkspaceApiKey = () => saveWorkspaceApiKey(workspaceApiKey.value)
 const pasteText = ref('')
 const playbooks = ref([])
 const selectedPlaybook = ref('')
