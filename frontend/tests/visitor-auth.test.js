@@ -47,3 +47,14 @@ test('public workbench does not ask visitors for a workspace key', () => {
   const source = fs.readFileSync(new URL('../src/views/Workbench.vue', import.meta.url), 'utf8')
   assert.doesNotMatch(source, /工作区访问密钥/)
 })
+
+test('history reports authentication and rate-limit failures clearly', async () => {
+  globalThis.localStorage = storage()
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith('/api/visitor/session')) return { ok: true, status: 200, json: async () => ({ token: 'visitor', role: 'visitor' }) }
+    return { ok: false, status: 429, json: async () => ({ detail: '访客审查次数已达上限' }) }
+  }
+  const { fetchReviewHistory } = await import(new URL(`../src/api.js?history=${Date.now()}`, import.meta.url))
+
+  await assert.rejects(fetchReviewHistory(), /请求过于频繁/)
+})

@@ -31,8 +31,13 @@ export const store = reactive({
 
 export function saveWorkspaceApiKey(value) {
   store.workspaceApiKey = value.trim()
-  if (store.workspaceApiKey) localStorage.setItem('cra_workspace_api_key', store.workspaceApiKey)
-  else localStorage.removeItem('cra_workspace_api_key')
+  if (store.workspaceApiKey) {
+    localStorage.setItem('cra_workspace_api_key', store.workspaceApiKey)
+    store.principalRole = 'admin'
+  } else {
+    localStorage.removeItem('cra_workspace_api_key')
+    store.principalRole = 'visitor'
+  }
 }
 
 let visitorSessionPromise = null
@@ -164,7 +169,11 @@ export function resumeReview(taskId, onProgress) {
 export async function fetchReviewHistory(status = '') {
   const query = status ? `?status=${encodeURIComponent(status)}` : ''
   const resp = await apiFetch(`/api/review-runs${query}`)
-  if (!resp.ok) throw new Error('历史记录读取失败')
+  if (!resp.ok) {
+    if (resp.status === 401) throw new Error('访客会话已失效，请刷新页面重试')
+    if (resp.status === 429) throw new Error('请求过于频繁，请稍后再试')
+    throw new Error('历史记录读取失败')
+  }
   return (await resp.json()).runs
 }
 

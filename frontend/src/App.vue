@@ -54,7 +54,7 @@
         <div><p class="page-kicker">合同审查助手</p><h1>{{ tabs.find(t => t.key === activeTab)?.label }}</h1></div>
         <span class="page-context">{{ store.report ? '当前合同：' + store.contractName : '采购与销售合同 · 风险初筛' }}</span>
       </div>
-      <Workbench v-show="activeTab === 'workbench'" @open-report="openReport" />
+      <Workbench v-if="activeTab === 'workbench'" @open-report="openReport" />
       <template v-if="activeTab === 'report'">
         <ReportDetail
           v-if="store.report"
@@ -66,12 +66,12 @@
           <el-empty description="暂无报告，请先在工作台审查一份合同（可一键载入演出合同）" />
         </div>
       </template>
-      <HistoryView v-show="activeTab === 'history'" @open-run="openHistoryRun" />
+      <HistoryView v-if="activeTab === 'history'" @open-run="openHistoryRun" />
       <CollaborationView v-if="activeTab === 'collaboration'" />
       <AssetsView v-if="activeTab === 'assets'" @review="reviewAsset" />
       <PlaybooksView v-if="activeTab === 'playbooks'" />
-      <EvalBoard v-show="activeTab === 'eval'" />
-      <SettingsView v-show="activeTab === 'settings'" />
+      <EvalBoard v-if="activeTab === 'eval'" />
+      <SettingsView v-if="activeTab === 'settings'" />
     </main>
 
     <footer class="footer">
@@ -94,16 +94,19 @@ import CollaborationView from './views/CollaborationView.vue'
 import AssetsView from './views/AssetsView.vue'
 import PlaybooksView from './views/PlaybooksView.vue'
 
-const tabs = [
+const visitorTabs = [
   { key: 'workbench', label: '工作台', icon: '🛠' },
   { key: 'report', label: '报告详情', icon: '📋' },
   { key: 'history', label: '历史记录', icon: '◷' },
+  { key: 'eval', label: '评测对比', icon: '📊' },
+]
+const adminTabs = [
   { key: 'collaboration', label: '审查协作' },
   { key: 'assets', label: '合同资产' },
   { key: 'playbooks', label: 'Playbook' },
-  { key: 'eval', label: '评测对比', icon: '📊' },
   { key: 'settings', label: '设置', icon: '⚙️' },
 ]
+const tabs = computed(() => store.principalRole === 'admin' ? [...visitorTabs, ...adminTabs] : visitorTabs)
 const activeTab = ref('workbench')
 const openReport = () => { activeTab.value = 'report' }
 const frontVersion = FRONT_VERSION
@@ -162,9 +165,9 @@ function applyReviewUpdate({ findingId, disposition }) {
 }
 
 onMounted(() => {
-  fetchBalance()
+  if (store.principalRole === 'admin') fetchBalance()
   // 每 5 分钟刷新一次余额（余额可能被其他端消耗）
-  setInterval(fetchBalance, 5 * 60 * 1000)
+  setInterval(() => { if (store.principalRole === 'admin') fetchBalance() }, 5 * 60 * 1000)
 })
 
 // 记住在线/离线模式选择，刷新后不丢
