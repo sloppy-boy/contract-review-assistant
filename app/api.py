@@ -51,6 +51,7 @@ from .asset_api import create_asset_router
 from .feedback import FeedbackStore
 from .observability import TraceStore
 from .security import ApiKeyAuthenticator, Principal
+from .visitor_sessions import VisitorSessionManager
 from .task_queue import TaskQueue
 from .data_lifecycle import DataLifecycleStore
 from .workflow_automation import IntegrationConfigStore
@@ -76,6 +77,13 @@ playbook_store = PlaybookStore(REVIEW_RUNS_PATH.with_name("playbooks.db"))
 collaboration_store = CollaborationStore(REVIEW_RUNS_PATH.with_name("collaboration.db"))
 asset_store = AssetStore(REVIEW_RUNS_PATH.with_name("assets.db"))
 authenticator = ApiKeyAuthenticator.from_environment()
+_visitor_secret = os.environ.get("CRA_VISITOR_SIGNING_SECRET", "").strip()
+if not _visitor_secret and os.environ.get("APP_ENV", "development") != "production":
+    _visitor_secret = "development-only-visitor-secret"
+visitor_sessions = VisitorSessionManager(
+    _visitor_secret,
+    int(os.environ.get("CRA_VISITOR_TOKEN_TTL_SECONDS", "604800")),
+) if _visitor_secret else None
 trace_store = TraceStore(REVIEW_RUNS_PATH.with_name("traces.db"))
 feedback_store = FeedbackStore(REVIEW_RUNS_PATH.with_name("feedback.db"))
 lifecycle_store = DataLifecycleStore(REVIEW_RUNS_PATH.with_name("lifecycle.db"))
@@ -217,9 +225,18 @@ class IntegrationConfigReq(BaseModel):
     enabled: bool = False
 
 
-def current_principal(x_api_key: str | None = Header(default=None)) -> Principal:
+def current_principal(
+    x_api_key: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
+) -> Principal:
     try:
-        return authenticator.authenticate(x_api_key)
+        if x_api_key:
+            return authenticator.authenticate(x_api_key)
+        if authorization and authorization.startswith("Bearer "):
+            if visitor_sessions is None:
+                raise PermissionError("visitor sessions are unavailable")
+            return visitor_sessions.authenticate(authorization.removeprefix("Bearer ").strip())
+        return authenticator.authenticate(None)
     except PermissionError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
@@ -247,6 +264,14 @@ app.include_router(create_collaboration_router(
     dispatch_event=lambda event: _dispatch_integration_event(event),
 ))
 app.include_router(create_asset_router(lambda: asset_store, lambda: authenticator, current_principal, lambda: review_run_store, lambda: lifecycle_store))
+
+
+@app.post("/visitor/session")
+def create_visitor_session() -> dict:
+    if visitor_sessions is None:
+        raise HTTPException(status_code=503, detail="visitor sessions are unavailable")
+    token, principal = visitor_sessions.issue()
+    return {"token": token, "role": principal.role, "expiresIn": visitor_sessions.ttl_seconds}
 
 
 @app.get("/platform/metrics")
@@ -498,14 +523,16 @@ def balance() -> dict:
 
 # ================================================================ 设置 / 供应商管理
 @app.get("/settings")
-def get_settings() -> dict:
+def get_settings(principal: Principal = Depends(current_principal)) -> dict:
     """设置页数据（脱敏）：providers（baseUrl/hasKey/models/价格）+ 模型路由选择。"""
+    _require_governance(principal, "admin")
     return public_settings()
 
 
 @app.get("/providers/{pid}/models")
-def provider_models(pid: str) -> dict:
+def provider_models(pid: str, principal: Principal = Depends(current_principal)) -> dict:
     """实时拉取指定供应商的模型列表（OpenAI 兼容 /models；失败回退本地预置目录）。"""
+    _require_governance(principal, "admin")
     cfg = load_settings()
     prov = (cfg.get("providers") or {}).get(pid)
     if not prov or not prov.get("apiKey") or not prov.get("baseUrl"):
@@ -535,8 +562,9 @@ class ProviderTestReq(BaseModel):
 
 
 @app.post("/providers/{pid}/test")
-def provider_test(pid: str, req: ProviderTestReq) -> dict:
+def provider_test(pid: str, req: ProviderTestReq, principal: Principal = Depends(current_principal)) -> dict:
     """测试供应商连通性：最小 chat 调用（max_tokens=8），验证 key + 模型可用。"""
+    _require_governance(principal, "admin")
     cfg = load_settings()
     prov = (cfg.get("providers") or {}).get(pid)
     if not prov or not prov.get("apiKey") or not prov.get("baseUrl"):
@@ -589,8 +617,9 @@ class SettingsUpdateReq(BaseModel):
 
 
 @app.put("/settings")
-def put_settings(req: SettingsUpdateReq) -> dict:
+def put_settings(req: SettingsUpdateReq, principal: Principal = Depends(current_principal)) -> dict:
     """保存设置（写 settings.json）。模型路由下次审查即时生效；common 类重启后端生效。"""
+    _require_governance(principal, "admin")
     saved = save_settings(
         {
             "providers": req.providers,
