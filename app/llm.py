@@ -13,6 +13,7 @@ import os
 import random
 import threading
 import time
+import uuid
 from typing import Any
 
 import httpx
@@ -100,6 +101,7 @@ class LLMClient:
         self.price_out = price_out
         self.total_input_tokens = 0
         self.total_output_tokens = 0
+        self._opencode_session = str(uuid.uuid4()) if "opencode.ai/zen/go/" in self.base_url else None
         self._usage_lock = threading.Lock()  # 13 个 worker 并发累加 token，防计数竞态
         self._client = httpx.Client(timeout=timeout) if api_key else None
 
@@ -129,12 +131,18 @@ class LLMClient:
         with _llm_semaphore:  # 全局并发限流（防 429）
             for attempt in range(self.max_retries + 1):
                 try:
+                    headers = {
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    }
+                    if self._opencode_session:
+                        headers.update({
+                            "x-opencode-session": self._opencode_session,
+                            "User-Agent": "contract-review-assistant/1.0",
+                        })
                     resp = self._client.post(
                         f"{self.base_url}/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {self.api_key}",
-                            "Content-Type": "application/json",
-                        },
+                        headers=headers,
                         json=payload,
                     )
                     # 余额/配额类错误（402 或余额关键词）→ 直接失败并冒泡（全局性错误）

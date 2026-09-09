@@ -735,6 +735,72 @@ class TestSettingsStore:
 
 
 class TestProviderConnectivity:
+    def test_opencode_provider_test_sends_stable_session_header(self, monkeypatch):
+        """OpenCode Go 连接测试应携带路由所需的会话标识。"""
+        from app import api as api_mod
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(api_mod, "load_settings", lambda: {
+            "providers": {"opencode-go": {
+                "baseUrl": "https://opencode.ai/zen/go/v1", "apiKey": "secret",
+            }}
+        })
+        captured = {}
+
+        class FakeResponse:
+            status_code = 200
+            text = '{"choices":[{"message":{"content":"OK"}}]}'
+            def json(self): return {"choices": [{"message": {"content": "OK"}}]}
+
+        class FakeClient:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def post(self, *args, **kwargs):
+                captured.update(kwargs.get("headers") or {})
+                return FakeResponse()
+
+        monkeypatch.setattr(api_mod.httpx, "Client", lambda **kwargs: FakeClient())
+        result = TestClient(api_mod.app).post(
+            "/providers/opencode-go/test", json={"model": "deepseek-v4-flash"}
+        ).json()
+
+        assert result["ok"] is True
+        assert captured["x-opencode-session"]
+        assert captured["User-Agent"].startswith("contract-review-assistant/")
+
+    def test_opencode_review_calls_reuse_session_header(self, monkeypatch):
+        """同一个审查客户端的多次模型调用应复用 OpenCode 会话标识。"""
+        from app import llm as llm_mod
+
+        captured = []
+
+        class FakeResponse:
+            status_code = 200
+            text = '{"choices":[{"message":{"content":"OK"}}]}'
+            def raise_for_status(self): return None
+            def json(self):
+                return {"choices": [{"message": {"content": "OK"}}], "usage": {}}
+
+        class FakeClient:
+            def __init__(self, **kwargs): pass
+            def post(self, *args, **kwargs):
+                captured.append(kwargs.get("headers") or {})
+                return FakeResponse()
+
+        monkeypatch.setattr(llm_mod.httpx, "Client", FakeClient)
+        client = llm_mod.LLMClient(
+            api_key="secret",
+            base_url="https://opencode.ai/zen/go/v1",
+            model="deepseek-v4-flash",
+        )
+        assert client.chat([{"role": "user", "content": "one"}]) == "OK"
+        assert client.chat([{"role": "user", "content": "two"}]) == "OK"
+
+        sessions = [headers["x-opencode-session"] for headers in captured]
+        assert sessions[0]
+        assert sessions[0] == sessions[1]
+        assert captured[0]["User-Agent"].startswith("contract-review-assistant/")
+
     def test_provider_test_exposes_vendor_error_body(self, monkeypatch, tmp_path):
         """供应商返回 400 时，测试接口保留错误正文，避免只显示无用的状态码。"""
         from app import api as api_mod

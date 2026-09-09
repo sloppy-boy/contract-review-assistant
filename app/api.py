@@ -14,6 +14,7 @@ import re
 import threading
 import time
 import copy
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Callable, Literal
@@ -544,12 +545,18 @@ def provider_test(pid: str, req: ProviderTestReq) -> dict:
         raise HTTPException(status_code=400, detail="请先选择要测试的模型")
     try:
         with httpx.Client(timeout=40) as client:
+            headers = {
+                "Authorization": f"Bearer {prov['apiKey']}",
+                "Content-Type": "application/json",
+            }
+            if pid == "opencode-go" or "opencode.ai/zen/go/" in prov["baseUrl"]:
+                headers.update({
+                    "x-opencode-session": f"provider-test-{uuid.uuid4()}",
+                    "User-Agent": "contract-review-assistant/1.0",
+                })
             resp = client.post(
                 f"{prov['baseUrl'].rstrip('/')}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {prov['apiKey']}",
-                    "Content-Type": "application/json",
-                },
+                headers=headers,
                 json={
                     "model": req.model,
                     "messages": [{"role": "user", "content": "回复OK"}],
