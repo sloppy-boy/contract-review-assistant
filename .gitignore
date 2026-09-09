@@ -49,3 +49,4 @@ scripts/_test_export*
 
 .worktrees/
 release.tar
+frontend-dist.tar
