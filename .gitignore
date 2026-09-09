@@ -46,3 +46,5 @@ Thumbs.db
 
 # 临时导出产物
 scripts/_test_export*
+
+.worktrees/
