@@ -4,6 +4,7 @@ from app import api
 from app.review_runs import ReviewRunStore
 from app.security import ApiKeyAuthenticator
 from app.visitor_sessions import VisitorSessionManager
+from app.visitor_rate_limit import SlidingWindowRateLimiter
 
 
 def _client(monkeypatch, tmp_path):
@@ -50,3 +51,18 @@ def test_visitor_cannot_access_settings_but_admin_can(monkeypatch, tmp_path):
 
     assert client.get("/settings", headers=_visitor(client)).status_code == 403
     assert client.get("/settings", headers={"X-API-Key": "admin-key"}).status_code == 200
+
+
+def test_visitor_upload_is_rate_limited_but_admin_bypasses(monkeypatch, tmp_path):
+    client = _client(monkeypatch, tmp_path)
+    monkeypatch.setattr(api, "visitor_upload_limiter", SlidingWindowRateLimiter(3, 3600))
+    monkeypatch.setattr(api, "active_llm_config", lambda role: {"provider": "test"})
+    monkeypatch.setattr(api.threading, "Thread", lambda *args, **kwargs: type("T", (), {"start": lambda self: None})())
+    visitor = _visitor(client)
+    payload = {"text": "第一条 测试合同", "contract_type": "purchase"}
+
+    assert [client.post("/upload", headers=visitor, data=payload).status_code for _ in range(3)] == [200, 200, 200]
+    limited = client.post("/upload", headers=visitor, data=payload)
+    assert limited.status_code == 429
+    assert limited.headers["Retry-After"]
+    assert client.post("/upload", headers={"X-API-Key": "admin-key"}, data=payload).status_code == 200

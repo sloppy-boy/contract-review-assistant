@@ -52,6 +52,7 @@ from .feedback import FeedbackStore
 from .observability import TraceStore
 from .security import ApiKeyAuthenticator, Principal
 from .visitor_sessions import VisitorSessionManager
+from .visitor_rate_limit import SlidingWindowRateLimiter
 from .task_queue import TaskQueue
 from .data_lifecycle import DataLifecycleStore
 from .workflow_automation import IntegrationConfigStore
@@ -84,6 +85,10 @@ visitor_sessions = VisitorSessionManager(
     _visitor_secret,
     int(os.environ.get("CRA_VISITOR_TOKEN_TTL_SECONDS", "604800")),
 ) if _visitor_secret else None
+visitor_upload_limiter = SlidingWindowRateLimiter(
+    int(os.environ.get("CRA_VISITOR_UPLOAD_LIMIT", "3")),
+    int(os.environ.get("CRA_VISITOR_UPLOAD_WINDOW_SECONDS", "3600")),
+)
 trace_store = TraceStore(REVIEW_RUNS_PATH.with_name("traces.db"))
 feedback_store = FeedbackStore(REVIEW_RUNS_PATH.with_name("feedback.db"))
 lifecycle_store = DataLifecycleStore(REVIEW_RUNS_PATH.with_name("lifecycle.db"))
@@ -633,6 +638,7 @@ def put_settings(req: SettingsUpdateReq, principal: Principal = Depends(current_
 
 @app.post("/upload")
 async def upload(
+    request: Request,
     file: UploadFile | None = None,
     text: str | None = Form(default=None),
     contract_type: str = Form(default="purchase"),
@@ -644,6 +650,15 @@ async def upload(
     principal: Principal = Depends(current_principal),
 ) -> dict:
     """上传合同（文件或文本）→ 返回 taskId（异步跑流水线）。"""
+    if principal.role == "visitor":
+        client_ip = request.client.host if request.client else "unknown"
+        allowed, retry_after = visitor_upload_limiter.allow(client_ip)
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="访客审查次数已达上限，请稍后再试",
+                headers={"Retry-After": str(retry_after)},
+            )
     if active_llm_config("main") is None:
         raise HTTPException(
             status_code=503,
