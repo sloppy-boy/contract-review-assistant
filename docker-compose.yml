@@ -14,6 +14,8 @@ services:
       CONTRACT_REVIEW_SETTINGS: /app/data/settings.json
     volumes:
       - review-data:/app/data
+      # 允许单机学习环境直接由 FastAPI 托管已构建的前端；EdgeOne 可继续作为外层 CDN。
+      - ./frontend/dist:/app/frontend/dist:ro
     restart: unless-stopped
 volumes:
   review-data:
