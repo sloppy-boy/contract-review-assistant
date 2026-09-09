@@ -556,7 +556,13 @@ def provider_test(pid: str, req: ProviderTestReq) -> dict:
                     "max_tokens": 16,
                 },
             )
-            resp.raise_for_status()
+            if resp.status_code >= 400:
+                # HTTPStatusError 的字符串只有状态码，保留供应商返回的诊断信息，
+                # 便于区分模型/协议/权限错误；响应中不应包含本地 API key。
+                detail = resp.text.strip()
+                return {"ok": False, "provider": pid, "model": req.model,
+                        "statusCode": resp.status_code,
+                        "error": f"供应商返回 HTTP {resp.status_code}: {detail[:500]}"}
             data = resp.json()
         usage = data.get("usage") or {}
         return {"ok": True, "provider": pid, "model": req.model, "usage": {

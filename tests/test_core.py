@@ -732,3 +732,36 @@ class TestSettingsStore:
         s = ss.load_settings()
         assert s["common"]["reviewMode"] == "B"
         assert s["common"]["workerBudgetTokens"] == 16000
+
+
+class TestProviderConnectivity:
+    def test_provider_test_exposes_vendor_error_body(self, monkeypatch, tmp_path):
+        """供应商返回 400 时，测试接口保留错误正文，避免只显示无用的状态码。"""
+        from app import api as api_mod
+        from fastapi.testclient import TestClient
+
+        monkeypatch.setattr(api_mod, "load_settings", lambda: {
+            "providers": {"opencode-go": {
+                "baseUrl": "https://opencode.ai/zen/go/v1", "apiKey": "secret",
+            }}
+        })
+
+        class FakeResponse:
+            status_code = 400
+            text = '{"error":"model does not support this endpoint"}'
+
+            def json(self):
+                return {}
+
+        class FakeClient:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def post(self, *args, **kwargs): return FakeResponse()
+
+        monkeypatch.setattr(api_mod.httpx, "Client", lambda **kwargs: FakeClient())
+        result = TestClient(api_mod.app).post(
+            "/providers/opencode-go/test", json={"model": "qwen3.8-max"}
+        ).json()
+        assert result["ok"] is False
+        assert result["statusCode"] == 400
+        assert "model does not support this endpoint" in result["error"]
