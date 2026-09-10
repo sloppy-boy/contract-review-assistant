@@ -1,5 +1,6 @@
 <template>
   <div class="report">
+    <div class="report-toolbar"><span class="report-origin">{{ reviewRunId ? '本次合同审查' : '示例报告 · 仅供体验' }}<span v-if="report.meta?.mock" class="quiet-tag">模拟数据</span></span><div class="report-actions"><el-button type="primary" :loading="exportingWord" @click="exportWord">导出 Word 报告</el-button><el-button @click="exportJson">导出 JSON</el-button></div></div>
     <!-- 顶部概览 -->
     <div class="overview">
       <div class="stat-card" :class="'sev-high'">
@@ -18,37 +19,9 @@
         <div class="stat-num">{{ s.total }}</div>
         <div class="stat-lbl">合计风险</div>
       </div>
-      <!-- 环形分布图（SVG） -->
-      <div class="donut-card">
-        <svg viewBox="0 0 120 120" class="donut">
-          <circle cx="60" cy="60" r="44" fill="none" stroke="#f3f4f6" stroke-width="18" />
-          <circle
-            v-for="seg in donutSegs" :key="seg.color"
-            cx="60" cy="60" r="44" fill="none"
-            :stroke="seg.color" stroke-width="18"
-            :stroke-dasharray="`${seg.len} ${100 - seg.len}`"
-            :stroke-dashoffset="seg.offset"
-            transform="rotate(-90 60 60)"
-            class="donut-seg"
-          />
-          <text x="60" y="57" text-anchor="middle" class="donut-total">{{ s.total }}</text>
-          <text x="60" y="74" text-anchor="middle" class="donut-lbl">风险</text>
-        </svg>
-        <div class="donut-legend">
-          <span v-for="seg in donutSegs" :key="seg.label" class="legend-item">
-            <i :style="{ background: seg.color }" />{{ seg.label }} {{ seg.len.toFixed(0) }}%
-          </span>
-        </div>
-      </div>
-      <div class="export-card">
-        <div class="stat-lbl" style="margin-bottom: 8px">导出报告</div>
-        <el-button type="primary" plain size="small" @click="exportJson"> JSON</el-button>
-        <el-button plain size="small" @click="exportWord"> Word</el-button>
-        <div v-if="report.meta?.mock" class="mock-tag">模拟演示数据</div>
-        <div v-else class="real-tag">已完成模型审查</div>
-      </div>
     </div>
 
+    <details class="report-statistics"><summary>审查详情与分类统计</summary>
     <div v-if="pipelineTimes.length" class="panel pipeline-times">
       <div class="panel-title">审查链路耗时 <span class="nav-count">真实运行记录</span></div>
       <div class="pipeline-time-grid">
@@ -72,22 +45,27 @@
       </div>
     </div>
 
+    </details>
+
     <!-- 主体：条款导航 ↔ 风险卡片 -->
     <div class="body">
       <div class="panel nav-panel">
         <div class="panel-title">条款导航 <span class="nav-count">{{ report.clauses.length }}</span></div>
-        <el-input v-model="query" size="small" placeholder="搜索条款…" clearable class="nav-search" />
+        <el-input aria-label="搜索条款" v-model="query" size="small" placeholder="搜索条款…" clearable class="nav-search" />
         <el-scrollbar :height="mainHeight" ref="navScroll">
-          <div
+          <button type="button"
             v-for="c in filteredClauses" :key="c.clauseId"
             class="clause-nav-item" :class="{ active: activeClause === c.clauseId }"
             @click="onClauseClick(c)"
+            :aria-pressed="activeClause === c.clauseId"
           >
             <span class="dot" :class="c.riskLevel || 'none'" />
             <span class="cid">{{ c.clauseId }}</span>
-            <span class="cquote">{{ c.quote.slice(0, 20) }}</span>
-          </div>
+            <span class="cquote">{{ (c.quote || '').slice(0, 60) }}</span>
+          </button>
+          <p v-if="!filteredClauses.length" class="no-clauses">未找到匹配条款</p>
         </el-scrollbar>
+        <div v-if="selectedClause" class="selected-clause"><b>条款 {{ selectedClause.clauseId }} · 完整原文</b><p>{{ selectedClause.quote }}</p></div>
       </div>
 
       <div class="panel risk-panel">
@@ -96,12 +74,14 @@
           <span class="nav-count">按严重度排序 · {{ report.risks.length }} 条</span>
           <el-tag v-if="hasDisputed" type="warning" size="small" effect="plain">含「有争议」项</el-tag>
         </div>
-        <el-scrollbar :height="mainHeight">
-          <el-empty v-if="!report.risks.length" description="未发现风险条款 ✓" :image-size="80" />
+        <el-radio-group v-model="severity" class="risk-filter" size="small" aria-label="筛选风险等级"><el-radio-button value="">全部 {{ s.total }}</el-radio-button><el-radio-button value="high">高危 {{ s.high }}</el-radio-button><el-radio-button value="medium">中危 {{ s.medium }}</el-radio-button><el-radio-button value="low">低危 {{ s.low }}</el-radio-button></el-radio-group>
+        <el-scrollbar :height="mainHeight" class="risk-list">
+          <el-empty v-if="!report.risks.length" description="本次未发现风险条款，仍建议人工核对全文" :image-size="80" />
+          <el-empty v-else-if="!filteredRisks.length" description="暂无该等级的风险" :image-size="70" />
           <div
-            v-for="r in report.risks" :key="r.id"
+            v-for="r in filteredRisks" :key="r.id"
             class="risk-card" :class="`sev-${r.severity}`"
-            :id="`risk-${r.clauseId}`"
+            :id="`risk-${r.id}`"
             @click="onRiskClick(r)"
           >
             <div class="risk-head">
@@ -120,11 +100,11 @@
               <el-tag v-if="r.requiresHumanReview !== false" size="small" type="warning">需人工确认</el-tag>
               <span v-for="(source, index) in riskSources(r)" :key="index">{{ sourceName(source.source) }}<template v-if="source.ruleId"> · {{ source.ruleId }} / v{{ source.version }}</template></span>
             </div>
-            <el-collapse class="risk-collapse">
-              <el-collapse-item name="quote" title="📜 原文摘录">
+            <el-collapse class="risk-collapse" :model-value="defaultExpanded">
+              <el-collapse-item name="quote" title="原文摘录">
                 <div class="quote-block">{{ r.clauseQuote }}</div>
               </el-collapse-item>
-              <el-collapse-item name="basis" title="⚖️ 法条依据">
+              <el-collapse-item name="basis" title="法条依据">
                 <el-tag size="small" :type="basisType(r.legalBasis?.tier || 'none')" effect="light">{{ basisName(r.legalBasis?.tier || 'none') }}</el-tag>
                 <div v-if="r.legalBasis?.articleId" class="basis">
                   <b>{{ r.legalBasis.articleId }}</b> · {{ r.legalBasis.version }}
@@ -132,7 +112,7 @@
                 </div>
                 <div v-else class="basis dim">未提供可核验的具体法条，请人工确认。</div>
               </el-collapse-item>
-              <el-collapse-item name="advice" title="💡 证据与修改建议">
+              <el-collapse-item name="advice" title="证据与修改建议">
                 <div class="basis"><b>证据：</b>{{ r.evidence }}</div>
                 <div class="basis"><b>建议：</b>{{ r.suggestion }}</div>
                 <div class="basis"><b>升级建议：</b>{{ r.escalationRecommendation || '未提供' }}</div>
@@ -143,13 +123,13 @@
                 </div>
                 <div v-if="r.suggestionClauseText" class="basis">
                   <b>示范条款：</b>
-                  <el-button size="small" text type="primary" @click.stop="copy(r.suggestionClauseText)">📋 复制</el-button>
+                  <el-button size="small" text type="primary" @click.stop="copy(r.suggestionClauseText)">复制条款</el-button>
                   <div class="quote-block">{{ r.suggestionClauseText }}</div>
                 </div>
                 <div v-if="r.status === 'disputed'" class="basis disputed-note">
-                  ⚠️ 复核驳回后 worker 坚持：{{ r.reVerifyJustification }}
+                  复核存在争议：{{ r.reVerifyJustification }}
                 </div>
-                <div v-if="reviewRunId" class="human-review-actions">
+                <div v-if="canReview" class="human-review-actions">
                   <span>人工复核：</span>
                   <el-button size="small" type="success" plain @click.stop="reviewFinding(r, 'accepted')">采纳</el-button>
                   <el-button size="small" type="warning" plain @click.stop="reviewFinding(r, 'accepted_with_changes')">修改后采纳</el-button>
@@ -172,9 +152,9 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { apiFetch, saveFindingDisposition } from '../api.js'
+import { store, apiFetch, saveFindingDisposition } from '../api.js'
 import { humanStatus, confidenceLabel, sourceName, riskSources, requestWordExport } from '../report-evidence.js'
 
 const props = defineProps({
@@ -182,9 +162,17 @@ const props = defineProps({
   reviewRunId: { type: String, default: null },
 })
 const emit = defineEmits(['review-updated'])
+const canReview = computed(() => !!props.reviewRunId && ['admin', 'legal_reviewer'].includes(store.principalRole))
 const s = computed(() => props.report.summary || { high: 0, medium: 0, low: 0, total: 0 })
 const activeClause = ref('')
 const query = ref('')
+const severity = ref('')
+const selectedClause = computed(() => props.report.clauses.find(clause => clause.clauseId === activeClause.value))
+const filteredRisks = computed(() => props.report.risks
+  .filter(risk => !severity.value || risk.severity === severity.value)
+  .slice().sort((a, b) => ({ high: 0, medium: 1, low: 2 }[a.severity] ?? 3) - ({ high: 0, medium: 1, low: 2 }[b.severity] ?? 3)))
+const exportingWord = ref(false)
+const defaultExpanded = ['quote', 'advice']
 
 const tagType = (sev) => ({ high: 'danger', medium: 'warning', low: 'success' }[sev] || 'info')
 const sevName = (sev) => ({ high: '高危', medium: '中危', low: '低危' }[sev] || sev)
@@ -238,26 +226,7 @@ const catRows = computed(() => {
 })
 
 // 主体高度填满视口（CSS calc 自适应，小窗口用 max() 保底 360px，消除下方空白）
-const mainHeight = 'max(360px, calc(100vh - 470px))'
-
-// 环形图分段
-const donutSegs = computed(() => {
-  const total = Math.max(s.value.total, 1)
-  const order = [
-    { label: '高危', color: '#dc2626', v: s.value.high },
-    { label: '中危', color: '#d97706', v: s.value.medium },
-    { label: '低危', color: '#059669', v: s.value.low },
-  ]
-  let offset = 0
-  return order
-    .filter((x) => x.v > 0)
-    .map((x) => {
-      const len = (x.v / total) * 100
-      const seg = { ...x, len, offset: -offset }
-      offset += len
-      return seg
-    })
-})
+const mainHeight = 'min(68vh, 850px)'
 
 // 条款搜索
 const filteredClauses = computed(() => {
@@ -267,11 +236,12 @@ const filteredClauses = computed(() => {
 })
 
 // 双向联动：点条款 → 滚动到风险卡片
-function onClauseClick(c) {
+async function onClauseClick(c) {
   activeClause.value = c.clauseId
-  if (c.riskLevel) {
-    document.getElementById(`risk-${c.clauseId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
+  severity.value = ''
+  await nextTick()
+  const risk = filteredRisks.value.find(item => item.clauseId === c.clauseId)
+  if (risk) document.getElementById(`risk-${risk.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
 }
 
 // 双向联动：点风险卡片 → 高亮条款导航并滚动
@@ -307,6 +277,8 @@ function exportJson() {
 }
 
 async function exportWord() {
+  if (exportingWord.value) return
+  exportingWord.value = true
   // 后端 python-docx 生成正式 Word 审阅报告（在线/离线报告均可导出）
   try {
     const blob = await requestWordExport(apiFetch, props.reviewRunId, props.report)
@@ -316,8 +288,8 @@ async function exportWord() {
     a.click()
     ElMessage.success('Word 报告已导出')
   } catch (e) {
-    ElMessage.error(`Word 导出失败：${e.message || e}（请确认后端已启动）`)
-  }
+    ElMessage.error(`Word 导出失败：${e.message || e}`)
+  } finally { exportingWord.value = false }
 }
 </script>
 

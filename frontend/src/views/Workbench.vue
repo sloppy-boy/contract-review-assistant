@@ -1,93 +1,52 @@
 <template>
   <div class="workbench">
-    <!-- 主体双栏：上传（主卡片） ↔ 演示合同 -->
-    <div class="main-row">
-      <div class="panel upload-panel">
-        <div class="panel-title">上传合同</div>
-        <el-upload
-          drag
-          :auto-upload="false"
-          :show-file-list="false"
-          accept=".txt,.md"
-          class="uploader"
-          @change="onFile"
-        >
-          <div class="upload-icon"></div>
-          <div class="upload-hint">拖拽合同文件到此处，或点击选择</div>
-          <div class="upload-sub">支持 .txt / .md 文本 · 合同数据不落第三方存储</div>
-          <div v-if="fileName" class="file-picked"> 已读取：<b>{{ fileName }}</b>（{{ text.length }} 字）</div>
-        </el-upload>
-        <!-- 粘贴输入（P1：规范承诺"拖拽上传或复制文本粘贴"，补真实入口） -->
-        <el-input
-          v-model="pasteText"
-          type="textarea"
-          :rows="4"
-          resize="none"
-          class="paste-box"
-          placeholder="或直接粘贴合同文本（纯文本，支持中文）…"
-          :disabled="store.running"
-        />
-        <!-- 设置行：类型 + 开始 -->
-        <div class="setting-row">
-            <el-radio-group v-model="store.contractType" size="default">
-              <el-radio-button value="purchase">采购合同</el-radio-button>
-              <el-radio-button value="sale">销售合同</el-radio-button>
-            </el-radio-group>
-          <select v-model="selectedPlaybook" class="playbook-select" :disabled="store.running" aria-label="审查 Playbook">
-            <option value="">内置审查基线</option>
-            <option v-for="book in playbooks" :key="`${book.playbookId}:${book.version}`" :value="`${book.playbookId}:${book.version}`">{{ book.content?.name }} · v{{ book.version }}</option>
-          </select>
-          <select v-model="selectedJurisdiction" class="context-select" :disabled="store.running" aria-label="法域"><option v-for="item in jurisdictions" :key="item" :value="item">{{ item }} 法域</option></select>
-          <select v-model="selectedScenario" class="context-select" :disabled="store.running" aria-label="业务场景"><option v-for="item in scenarios" :key="item" :value="item">{{ item }} 场景</option></select>
-          <select v-model="selectedScope" class="context-select" :disabled="store.running" aria-label="生效范围"><option v-for="item in scopes" :key="item" :value="item">{{ item }} 范围</option></select>
-          <el-button type="primary" class="start-btn" :loading="store.running" @click="reviewText">
-             开始审查
-          </el-button>
-        </div>
-        <div class="pipe-desc">
-          条款抽取 → 风险识别 → 证据复核 → 审查报告
-        </div>
-      </div>
-
-      <div class="panel demo-panel">
-        <div class="panel-title"> 示例合同一键载入<span class="nav-count">离线可用</span></div>
-        <div class="demo-grid">
-          <div
-            v-for="d in DEMO_CARDS" :key="d.id"
-            class="demo-card" :class="d.tone"
-            @click="loadDemo(d.id)"
-          >
-            <div class="demo-name">{{ d.name }}</div>
-            <div class="demo-desc">{{ d.desc }}</div>
-            <span class="demo-tag">{{ d.tag }}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 流水线阶段进度（后端真实进度：阶段 + 各阶段实际耗时） -->
-    <div v-if="store.running || store.report" class="panel stage-panel">
-      <div class="panel-title">流水线进度 <span class="nav-count">各阶段实际耗时</span></div>
+    <section v-if="store.running" class="panel stage-panel" aria-label="审查进度" aria-live="polite">
+      <div class="section-heading"><div><p class="eyebrow">正在审查</p><h2>让每一处风险，都有据可查。</h2></div><span class="live-status"><i /> 审查进行中</span></div>
       <el-steps :active="stepsActive" align-center finish-status="success" class="steps">
-        <el-step
-          v-for="(s, i) in STAGES" :key="s"
-          :title="s"
-          :description="stepDesc(i)"
-          :status="stepStatus(i)"
-        />
+        <el-step v-for="(s, i) in stageNames" :key="s" :title="s" :description="stepDesc(i)" :status="stepStatus(i)" />
       </el-steps>
-      <div v-if="store.running" class="stage-hint">
-        {{ runningText }}
-        <span class="stage-note">深度模型审查约需 3~10 分钟，请耐心等待，完成后自动跳转报告</span>
-      </div>
+      <p class="stage-hint">{{ runningText }}<span class="stage-note">通常需要数分钟。你可以切换页面，刷新后也可继续查看。</span></p>
+    </section>
+    <el-alert v-if="error" type="error" :title="error" show-icon closable class="err" @close="error = ''" />
+    <div class="main-row">
+      <section class="panel upload-panel">
+        <div class="section-heading"><div><p class="eyebrow">NEW REVIEW</p><h2>从一份合同开始</h2></div><span class="step-marker">01 / 02</span></div>
+        <p class="section-description">上传文本文件，或直接粘贴正文。确认内容后即可开始审查。</p>
+        <el-upload drag :auto-upload="false" :show-file-list="false" accept=".txt,.md" :disabled="store.running" class="uploader" @change="onFile">
+          <svg class="upload-icon" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M28 6H12v36h26V16L28 6Z" stroke="currentColor" stroke-width="1.5"/><path d="M28 6v10h10M24 33V21m-5 5 5-5 5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <div class="upload-hint">{{ reading ? '正在读取文件…' : '将合同拖到这里，或点击选择文件' }}</div>
+          <div class="upload-sub">TXT / Markdown 文本文件 · 其他格式可复制正文粘贴</div>
+        </el-upload>
+        <div class="editor-label"><label for="contract-text">合同正文 <span v-if="fileName" class="filename" :title="fileName">{{ fileName }}</span></label><button v-if="text || reading" type="button" class="text-button" :disabled="store.running" @click="clearDraft">清空</button></div>
+        <el-input id="contract-text" v-model="pasteText" type="textarea" :rows="6" resize="vertical" class="paste-box" placeholder="在此粘贴或编辑合同正文…" :disabled="store.running || reading" />
+        <div class="editor-foot"><span>{{ fileName ? '文件内容已载入，可直接编辑' : '请保留条款编号，便于对照原文' }}</span><span>{{ text.length.toLocaleString() }} 字符</span></div>
+        <div class="contract-options"><div class="field-label"><span class="step-number">02</span> 确认合同类型</div>
+          <el-radio-group v-model="store.contractType" :disabled="store.running" aria-label="合同类型">
+            <el-radio-button value="purchase">采购合同</el-radio-button><el-radio-button value="sale">销售合同</el-radio-button>
+          </el-radio-group>
+        </div>
+        <details class="advanced-options">
+          <summary>高级审查选项 <span>{{ selectedPlaybookObject?.content?.name || '使用内置审查基线' }}</span></summary>
+          <div class="advanced-fields">
+            <label>审查规则<select v-model="selectedPlaybook" class="playbook-select" :disabled="store.running" aria-label="审查规则"><option value="">内置审查基线</option><option v-for="book in playbooks" :key="`${book.playbookId}:${book.version}`" :value="`${book.playbookId}:${book.version}`">{{ book.content?.name }} · v{{ book.version }}</option></select></label>
+            <label>适用法域<select v-model="selectedJurisdiction" :disabled="store.running || !selectedPlaybook" aria-label="法域"><option v-for="item in jurisdictions" :key="item" :value="item">{{ item === 'CN' ? '中国大陆' : item }}</option></select></label>
+            <label>业务场景<select v-model="selectedScenario" :disabled="store.running || !selectedPlaybook" aria-label="业务场景"><option v-for="item in scenarios" :key="item" :value="item">{{ item === 'general' ? '通用场景' : item }}</option></select></label>
+            <label>生效范围<select v-model="selectedScope" :disabled="store.running || !selectedPlaybook" aria-label="生效范围"><option v-for="item in scopes" :key="item" :value="item">{{ item === '*' ? '全部范围' : item }}</option></select></label>
+          </div>
+        </details>
+        <div v-if="store.mode === 'offline'" class="mode-notice">当前为示例模式。<button type="button" class="text-button" :disabled="store.running" @click="store.mode = 'online'">切换在线审查</button>即可提交自己的合同。</div>
+        <div class="submit-row"><span>审查完成后，将自动打开报告</span><el-button type="primary" class="start-btn" :loading="store.running" :disabled="!text.trim() || reading || store.mode !== 'online'" @click="reviewText">{{ store.running ? '正在审查' : '开始审查' }} <span aria-hidden="true">→</span></el-button></div>
+      </section>
+      <aside class="workbench-aside">
+        <section class="panel guide-panel"><p class="eyebrow">REVIEW WITH EVIDENCE</p><h2>看清风险，<br>再作决定。</h2><p>从合同条款到修改建议，<br>让审查结果可以逐条核对。</p><ol class="review-guide"><li><span>01</span><div><b>识别合同风险</b><p>关注付款、交付、违约等关键条款</p></div></li><li><span>02</span><div><b>对照原文与依据</b><p>查看原文摘录、法条引用和证据</p></div></li><li><span>03</span><div><b>形成修改建议</b><p>复制示范条款，导出报告供人工复核</p></div></li></ol></section>
+        <section class="panel demo-panel"><div class="section-heading"><h2>先看一份示例</h2><span class="quiet-tag">无需上传</span></div><p class="section-description">浏览已有报告，了解审查结果的呈现方式。</p><div class="demo-grid"><button v-for="d in DEMO_CARDS" :key="d.id" type="button" class="demo-card" :class="d.tone" :disabled="store.running || reading" @click="loadDemo(d.id)"><span class="demo-title"><span class="demo-name">{{ d.name }}</span><span aria-hidden="true">↗</span></span><span class="demo-desc">{{ d.desc }}</span><span class="demo-tag">{{ d.tag }}</span></button></div></section>
+      </aside>
     </div>
-
-    <el-alert v-if="error" type="error" :title="error" closable class="err" @close="error = ''" />
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { store, DEMO_CONTRACTS, STAGES, fetchPlaybooks, loadDemoReport, resumeReview, uploadAndReview } from '../api.js'
 
@@ -95,7 +54,11 @@ const emit = defineEmits(['open-report'])
 const error = ref('')
 const fileName = ref('')
 const text = ref('')
-const pasteText = ref('')
+const pasteText = text
+const reading = ref(false)
+let fileReadVersion = 0
+let visible = true
+const stageNames = ['条款抽取', '风险识别', '证据复核', '生成报告']
 const playbooks = ref([])
 const selectedPlaybook = ref('')
 const selectedPlaybookObject = computed(() => playbooks.value.find(book => `${book.playbookId}:${book.version}` === selectedPlaybook.value) || null)
@@ -115,17 +78,17 @@ watch(selectedPlaybookObject, (book) => {
 })
 watch(() => store.assetDraft, (asset) => {
   if (!asset) return
-  text.value = asset.text; pasteText.value = ''; fileName.value = asset.filename
-})
+  text.value = asset.text; fileName.value = asset.filename
+}, { immediate: true })
 watch(() => store.workspaceApiKey, () => {
   if (store.assetDraft) { text.value = ''; pasteText.value = ''; fileName.value = ''; store.assetDraft = null }
 })
 const ACTIVE_RUN_KEY = 'cra_active_review_run'
 
 const DEMO_CARDS = [
-  { ...DEMO_CONTRACTS[0], tone: 'high', tag: '召回演示' },
-  { ...DEMO_CONTRACTS[1], tone: 'clean', tag: '低误报' },
-  { ...DEMO_CONTRACTS[2], tone: 'boundary', tag: '争议标定' },
+  { ...DEMO_CONTRACTS[0], name: '高风险合同', desc: '查看重点风险、法条依据与修改建议', tone: 'high', tag: '风险识别' },
+  { ...DEMO_CONTRACTS[1], name: '规范合同', desc: '了解较完善的合同如何呈现审查结果', tone: 'clean', tag: '规范参考' },
+  { ...DEMO_CONTRACTS[2], name: '争议条款合同', desc: '了解需要进一步人工判断的条款', tone: 'boundary', tag: '争议分析' },
 ]
 
 // ── 真实进度渲染：el-steps active + 每阶段耗时 + 当前阶段实时计时 ──
@@ -167,24 +130,39 @@ function stepDesc(i) {
 
 const runningText = computed(() => {
   if (store.stage >= STAGES.length) return '正在生成报告…'
-  const detail = store.stageDetail ? `（${store.stageDetail}）` : ''
-  return `${STAGES[store.stage]} 进行中${detail}`
+  return `${stageNames[store.stage] || '审查准备'}进行中，请稍候…`
 })
 
 function handleFile(f) {
-  if (!f) return
-  // 非文本文件（docx/pdf 为二进制）给出提示，避免读出乱码
+  if (!f || store.running) return
   if (!/\.(txt|md)$/i.test(f.name || '')) {
-    ElMessage.warning(`「${f.name}」为二进制格式，当前演示以 .txt 文本为主，将按文本读取（可能乱码）`)
+    ElMessage.warning('请选择 TXT 或 Markdown 文本文件；其他格式请复制正文后粘贴。')
+    return
   }
+  const version = ++fileReadVersion
+  reading.value = true
   const reader = new FileReader()
   reader.onload = () => {
+    if (version !== fileReadVersion) return
+    reading.value = false
     text.value = reader.result || ''
     fileName.value = f.name
+    error.value = ''
     ElMessage.success(`已读取：${f.name}（${text.value.length} 字）`)
   }
-  reader.onerror = () => ElMessage.error('文件读取失败，请重试')
+  reader.onerror = () => {
+    if (version !== fileReadVersion) return
+    reading.value = false
+    ElMessage.error('文件读取失败，请重新选择或粘贴正文')
+  }
   reader.readAsText(f)
+}
+
+function clearDraft() {
+  if (store.running) return
+  fileReadVersion++
+  reading.value = false
+  text.value = ''; fileName.value = ''; error.value = ''
 }
 
 function onFile(uploadFile) {
@@ -196,7 +174,7 @@ function onFile(uploadFile) {
 function onDragOver(e) { e.preventDefault() }
 function onDrop(e) {
   e.preventDefault()
-  handleFile(e.dataTransfer?.files?.[0])
+  if (visible && !e.target.closest?.('.uploader')) handleFile(e.dataTransfer?.files?.[0])
 }
 
 async function loadAvailablePlaybooks() {
@@ -206,14 +184,24 @@ async function loadAvailablePlaybooks() {
     if (!playbooks.value.some(book => `${book.playbookId}:${book.version}` === selectedPlaybook.value)) selectedPlaybook.value = ''
   } catch { playbooks.value = []; selectedPlaybook.value = '' }
 }
-watch(() => store.contractType, loadAvailablePlaybooks)
+watch(() => [store.contractType, store.mode], loadAvailablePlaybooks)
+function restoreReview() {
+  if (store.running || store.mode !== 'online') return
+  const saved = localStorage.getItem(ACTIVE_RUN_KEY)
+  if (!saved) return
+  try { return resumePersistedReview(JSON.parse(saved)) }
+  catch { localStorage.removeItem(ACTIVE_RUN_KEY) }
+}
+onActivated(() => {
+  visible = true
+  if (store.running) startClock()
+  else return restoreReview()
+})
+onDeactivated(() => { visible = false; stopClock() })
 onMounted(async () => {
   document.addEventListener('dragover', onDragOver)
   document.addEventListener('drop', onDrop)
-  const saved = localStorage.getItem(ACTIVE_RUN_KEY)
-  if (saved && store.mode === 'online') {
-    try { resumePersistedReview(JSON.parse(saved)) } catch { localStorage.removeItem(ACTIVE_RUN_KEY) }
-  }
+  restoreReview()
   await loadAvailablePlaybooks()
 })
 onUnmounted(() => {
@@ -222,7 +210,8 @@ onUnmounted(() => {
 })
 
 async function reviewText() {
-  const content = text.value.trim() || pasteText.value.trim()
+  if (store.running || reading.value) return
+  const content = text.value.trim()
   if (!content) { ElMessage.warning('请先上传或粘贴合同文本'); return }
   if (store.mode === 'offline') { ElMessage.info('离线演示模式请使用右侧示例合同一键载入'); return }
 
@@ -315,19 +304,21 @@ async function resumePersistedReview(saved) {
 }
 
 async function loadDemo(id) {
+  if (store.running || reading.value) return
   store.running = true
   store.stage = 0
   store.stageStatus = 'done'   // 离线缓存瞬时完成：全部阶段绿勾
-  store.stageTimes = [200, 200, 200, 200]
+  store.stageTimes = [0, 0, 0, 0]
   store.stageDetail = ''
   error.value = ''
   try {
     const report = await loadDemoReport(id)
     store.report = report
     store.reviewRunId = null
-    store.contractName = id
+    store.contractName = report.contract?.name || DEMO_CARDS.find(item => item.id === id)?.name || '示例合同'
+    store.stageTimes = report.meta?.stageTimes || [0, 0, 0, 0]
     store.stage = STAGES.length - 1
-    ElMessage.success(`已载入 ${id}（真实 pipeline 缓存）`)
+    ElMessage.success('已打开示例报告')
     emit('open-report')
   } catch (e) {
     error.value = String(e.message || e)
@@ -335,68 +326,5 @@ async function loadDemo(id) {
     store.running = false
   }
 }
+defineExpose({ resumePersistedReview })
 </script>
-
-<style scoped>
-.workbench { display: flex; flex-direction: column; gap: 16px; }
-.panel-title { margin-bottom: 12px; }
-
-/* 主体双栏：上传主卡片 ↔ 演示合同 */
-.main-row { display: grid; grid-template-columns: 1.6fr 1fr; gap: 16px; align-items: stretch; }
-.upload-panel, .demo-panel { margin: 0; display: flex; flex-direction: column; }
-
-/* 上传卡片 */
-.uploader :deep(.el-upload) { width: 100%; }
-.uploader :deep(.el-upload-dragger) {
-  padding: 34px 20px;
-  border-radius: var(--radius);
-  border: 2px dashed #c3d6f9;
-  background: var(--el-color-primary-light-9);
-  transition: all 0.2s ease;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-}
-.uploader :deep(.el-upload-dragger:hover) { border-color: var(--el-color-primary); background: #e3edfe; }
-.upload-icon { font-size: 36px; margin-bottom: 8px; }
-.upload-hint { font-size: 15px; color: var(--el-color-primary); font-weight: 600; }
-.upload-sub { font-size: 12px; color: var(--ink-3); margin-top: 6px; }
-.file-picked { margin-top: 12px; font-size: 13px; color: var(--sev-low); background: var(--sev-low-bg); border-radius: 6px; padding: 6px 12px; }
-.paste-box { margin-top: 12px; }
-.paste-box :deep(.el-textarea__inner) { font-size: 13px; line-height: 1.6; }
-
-/* 设置行（上传卡片底部）：类型 + 开始 内联 */
-.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
-.context-select,.playbook-select { min-width: 112px; border: 1px solid var(--line); border-radius: 5px; padding: 8px; background: #fff; color: var(--ink-2); }
-.start-btn { margin: 0; }
-.pipe-desc { margin-top: 10px; font-size: 11px; color: var(--ink-3); line-height: 1.6; }
-
-/* 演示合同：竖排三卡（右侧栏） */
-.demo-grid { display: flex; flex-direction: column; gap: 10px; flex: 1; }
-.demo-card {
-  border: 1px solid var(--line);
-  border-left-width: 4px;
-  border-radius: 8px;
-  padding: 13px 15px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  background: #fff;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.demo-card:hover { box-shadow: var(--shadow-lg); transform: translateX(2px); }
-.demo-card.high { border-left-color: var(--sev-high); }
-.demo-card.clean { border-left-color: var(--sev-low); }
-.demo-card.boundary { border-left-color: var(--sev-medium); }
-.demo-name { font-size: 14px; font-weight: 600; color: var(--ink); }
-.demo-desc { font-size: 12px; color: var(--ink-3); line-height: 1.5; }
-.demo-tag { align-self: flex-start; font-size: 11px; padding: 1px 10px; border-radius: 10px; background: #f3f4f6; color: var(--ink-2); }
-
-.stage-panel { margin-top: 0; }
-.steps { margin: 8px 0 4px; }
-.stage-hint { text-align: center; font-size: 12px; color: var(--ink-3); margin-top: 8px; }
-.stage-note { margin-left: 8px; color: var(--ink-3); opacity: 0.75; }
-.err { margin-top: 4px; }
-</style>

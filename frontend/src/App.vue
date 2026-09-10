@@ -1,88 +1,31 @@
 <template>
   <div class="app">
-    <!-- 品牌头部 -->
-    <header class="header">
-      <div class="brand">
-        <div class="logo" aria-hidden="true">审</div>
-        <div>
-          <div class="brand-title">合同审查助手</div>
-          <div class="brand-sub">合同风险与证据工作台</div>
-        </div>
-      </div>
-      <div class="header-right">
-        <el-tag v-if="store.report" size="small" effect="dark" class="ctag" :type="'primary'">
-          当前报告：{{ store.contractName || '—' }}
-        </el-tag>
-        <div class="mode-switch">
-          <el-radio-group v-model="store.mode" size="small">
-            <el-radio-button value="online">在线审查</el-radio-button>
-            <el-radio-button value="offline">离线演示</el-radio-button>
-          </el-radio-group>
-        </div>
-      </div>
-    </header>
-
-    <!-- 余额预警横幅（在线模式；余额耗尽 → 红色停止服务；低余额 → 黄色预警） -->
-    <div v-if="balanceBanner" class="balance-banner" :class="balanceBanner.type">
-      <span class="banner-icon">{{ balanceBanner.icon }}</span>
-      <span class="banner-text">{{ balanceBanner.text }}</span>
-      <el-button
-        v-if="balanceBanner.type === 'danger' && store.mode === 'online'"
-        size="small" text class="banner-action" @click="refreshBalance"
-      >重新检测</el-button>
-      <el-button
-        v-if="balanceBanner.type === 'query-failed' && store.mode === 'online'"
-        size="small" text class="banner-action" @click="refreshBalance"
-      >重试</el-button>
-    </div>
-
-    <!-- 主导航 -->
-    <nav class="nav">
-      <button
-        v-for="t in tabs" :key="t.key"
-        class="nav-item" :class="{ active: activeTab === t.key }"
-        @click="activeTab = t.key"
-        :aria-current="activeTab === t.key ? 'page' : undefined"
-      >
-        {{ t.label }}
-      </button>
-    </nav>
-
-    <!-- 内容区 -->
-    <main class="main">
-      <div class="page-heading">
-        <div><p class="page-kicker">合同审查助手</p><h1>{{ tabs.find(t => t.key === activeTab)?.label }}</h1></div>
-        <span class="page-context">{{ store.report ? '当前合同：' + store.contractName : '采购与销售合同 · 风险初筛' }}</span>
-      </div>
-      <Workbench v-if="activeTab === 'workbench'" @open-report="openReport" />
+    <a class="skip-link" href="#main-content">跳转到主要内容</a>
+    <aside class="sidebar">
+      <div class="brand"><div class="logo" aria-hidden="true">审</div><div><div class="brand-title">合同审查助手</div><div class="brand-sub">CONTRACT REVIEW</div></div></div>
+      <nav class="nav" aria-label="主要导航"><p class="nav-caption">工作空间</p><button v-for="t in tabs" :key="t.key" class="nav-item" :class="{ active: activeTab === t.key }" @click="activeTab = t.key" :aria-current="activeTab === t.key ? 'page' : undefined"><span class="nav-icon" aria-hidden="true">{{ t.icon || '·' }}</span>{{ t.label }}<span v-if="t.key === 'workbench' && store.running" class="nav-live" aria-label="审查进行中" /></button></nav>
+      <div class="sidebar-bottom"><button class="secondary-nav" :class="{ active: activeTab === 'eval' }" @click="activeTab = 'eval'" :aria-current="activeTab === 'eval' ? 'page' : undefined">了解评测表现 <span aria-hidden="true">↗</span></button><div class="sidebar-note">每一处判断<br>都值得认真核对。<span>合同风险与证据工作台</span></div></div>
+    </aside>
+    <header class="header"><span class="breadcrumb">工作空间 <span>/</span> {{ pageTitle }}</span><div class="header-right"><span class="session-label"><i />{{ store.principalRole === 'admin' ? '管理工作区' : '访客工作区' }}</span><el-radio-group v-model="store.mode" size="small" :disabled="store.running" aria-label="审查模式" class="mode-switch"><el-radio-button value="online">在线审查</el-radio-button><el-radio-button value="offline">示例体验</el-radio-button></el-radio-group></div></header>
+    <div v-if="balanceBanner" class="balance-banner" :class="balanceBanner.type"><span>{{ balanceBanner.text }}</span><el-button size="small" text @click="refreshBalance">重新检测</el-button></div>
+    <main id="main-content" class="main" tabindex="-1">
+      <div class="page-heading"><div><p class="page-kicker">{{ pageKicker }}</p><h1>{{ pageTitle }}</h1><p class="page-description">{{ pageDescription }}</p></div><span v-if="store.report && activeTab === 'report'" class="report-context" :title="store.contractName">{{ store.contractName }}</span><el-button v-if="activeTab === 'history'" type="primary" @click="activeTab = 'workbench'">新建审查 <span aria-hidden="true">＋</span></el-button></div>
+      <KeepAlive>
+        <Workbench v-if="activeTab === 'workbench'" ref="workbench" @open-report="openReport" />
+      </KeepAlive>
       <template v-if="activeTab === 'report'">
-        <ReportDetail
-          v-if="store.report"
-          :report="store.report"
-          :review-run-id="store.reviewRunId"
-          @review-updated="applyReviewUpdate"
-        />
-        <div v-else class="panel empty-panel">
-          <el-empty description="暂无报告，请先在工作台审查一份合同（可一键载入演出合同）" />
-        </div>
+        <ReportDetail v-if="store.report" :key="store.reviewRunId || store.contractName" :report="store.report" :review-run-id="store.reviewRunId" @review-updated="applyReviewUpdate" />
+        <div v-else class="panel empty-panel"><span class="empty-symbol" aria-hidden="true">▤</span><h2>你的第一份审查报告，从这里开始</h2><p>上传或粘贴合同，完成审查后即可查看风险与修改建议。</p><el-button type="primary" @click="activeTab = 'workbench'">开始审查合同</el-button><el-button @click="activeTab = 'history'">查看历史记录</el-button></div>
       </template>
-      <HistoryView v-if="activeTab === 'history'" @open-run="openHistoryRun" />
-      <CollaborationView v-if="activeTab === 'collaboration'" />
-      <AssetsView v-if="activeTab === 'assets'" @review="reviewAsset" />
-      <PlaybooksView v-if="activeTab === 'playbooks'" />
-      <EvalBoard v-if="activeTab === 'eval'" />
-      <SettingsView v-if="activeTab === 'settings'" />
+      <HistoryView v-if="activeTab === 'history'" :opening="openingRun" @open-run="openHistoryRun" @new-review="activeTab = 'workbench'" />
+      <CollaborationView v-if="activeTab === 'collaboration'" /><AssetsView v-if="activeTab === 'assets'" @review="reviewAsset" /><PlaybooksView v-if="activeTab === 'playbooks'" /><EvalBoard v-if="activeTab === 'eval'" /><SettingsView v-if="activeTab === 'settings'" />
     </main>
-
-    <footer class="footer">
-      审查结果仅供初筛参考，需人工终审，不构成法律意见。
-      <span class="ver-tag">v{{ frontVersion }}</span>
-    </footer>
+    <footer class="footer"><span>审查结果仅供初筛参考，需人工终审，不构成法律意见。</span><span class="ver-tag">合同审查助手 · v{{ frontVersion }}</span></footer>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { store, fetchBalance, fetchReviewRun, FRONT_VERSION } from './api.js'
 import Workbench from './views/Workbench.vue'
@@ -95,10 +38,9 @@ import AssetsView from './views/AssetsView.vue'
 import PlaybooksView from './views/PlaybooksView.vue'
 
 const visitorTabs = [
-  { key: 'workbench', label: '工作台', icon: '🛠' },
-  { key: 'report', label: '报告详情', icon: '📋' },
-  { key: 'history', label: '历史记录', icon: '◷' },
-  { key: 'eval', label: '评测对比', icon: '📊' },
+  { key: 'workbench', label: '合同审查', icon: '01' },
+  { key: 'report', label: '审查报告', icon: '02' },
+  { key: 'history', label: '历史记录', icon: '03' },
 ]
 const adminTabs = [
   { key: 'collaboration', label: '审查协作' },
@@ -108,6 +50,11 @@ const adminTabs = [
 ]
 const tabs = computed(() => store.principalRole === 'admin' ? [...visitorTabs, ...adminTabs] : visitorTabs)
 const activeTab = ref('workbench')
+const pageTitle = computed(() => activeTab.value === 'eval' ? '评测表现' : tabs.value.find(t => t.key === activeTab.value)?.label || '工作空间')
+const pageKicker = computed(() => ({ workbench: 'REVIEW WORKSPACE', report: 'REVIEW REPORT', history: 'REVIEW HISTORY' }[activeTab.value] || 'WORKSPACE'))
+const pageDescription = computed(() => ({ workbench: '把复杂合同，变成可以逐条核对的风险与建议。', report: '先关注重点风险，再结合原文、依据与建议作出判断。', history: '回到之前的审查，继续查看进度与报告。' }[activeTab.value] || '合同审查助手 · 工作空间'))
+const workbench = ref(null)
+const openingRun = ref(false)
 const openReport = () => { activeTab.value = 'report' }
 const frontVersion = FRONT_VERSION
 
@@ -118,11 +65,27 @@ function reviewAsset(asset) {
 }
 
 async function openHistoryRun(run) {
-  const task = await fetchReviewRun(run.id)
-  store.reviewRunId = task.id
-  store.contractName = task.report?.contract?.name || `${run.contract_type === 'sale' ? '销售' : '采购'}合同`
-  store.report = task.report || null
-  activeTab.value = task.report ? 'report' : 'workbench'
+  if (openingRun.value) return
+  openingRun.value = true
+  try {
+    const task = await fetchReviewRun(run.id)
+    if (task.report) {
+      store.reviewRunId = task.id
+      store.contractName = task.report.contract?.name || `${run.contract_type === 'sale' ? '销售' : '采购'}合同`
+      store.report = task.report
+      activeTab.value = 'report'
+    } else if (['running', 'queued'].includes(task.status)) {
+      if (store.running) { ElMessage.info('当前审查仍在进行，可完成后查看其他任务'); return }
+      const saved = { taskId: task.id, contractName: `${run.contract_type === 'sale' ? '销售' : '采购'}合同` }
+      localStorage.setItem('cra_active_review_run', JSON.stringify(saved))
+      activeTab.value = 'workbench'
+      await nextTick()
+      workbench.value?.resumePersistedReview(saved)
+    } else {
+      ElMessage.warning(task.error || '本次审查未完成，请回到合同审查页面重新提交正文。')
+    }
+  } catch (error) { ElMessage.error(error.message || '报告读取失败，请重试') }
+  finally { openingRun.value = false }
 }
 
 // ── 余额预警横幅 ─────────────────────────────────────────────
@@ -164,95 +127,14 @@ function applyReviewUpdate({ findingId, disposition }) {
   risk.reviewDecision = disposition
 }
 
+let balanceTimer
 onMounted(() => {
   if (store.principalRole === 'admin') fetchBalance()
   // 每 5 分钟刷新一次余额（余额可能被其他端消耗）
-  setInterval(() => { if (store.principalRole === 'admin') fetchBalance() }, 5 * 60 * 1000)
+  balanceTimer = setInterval(() => { if (store.principalRole === 'admin') fetchBalance() }, 5 * 60 * 1000)
 })
+onUnmounted(() => clearInterval(balanceTimer))
 
 // 记住在线/离线模式选择，刷新后不丢
 watch(() => store.mode, (m) => localStorage.setItem('cra_mode', m))
 </script>
-
-<style scoped>
-.app { min-height: 100vh; display: flex; flex-direction: column; }
-.header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 14px 32px;
-  background: linear-gradient(120deg, #1e3a8a 0%, #2563eb 55%, #3b82f6 100%);
-  color: #fff;
-  box-shadow: 0 2px 12px rgba(30, 58, 138, 0.25);
-}
-.brand { display: flex; align-items: center; gap: 14px; }
-.logo {
-  width: 44px; height: 44px; border-radius: 12px;
-  background: rgba(255, 255, 255, 0.15);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 24px;
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
-}
-.brand-title { font-size: 20px; font-weight: 700; letter-spacing: 1px; }
-.brand-sub { font-size: 12px; color: rgba(255, 255, 255, 0.75); margin-top: 2px; }
-.header-right { display: flex; align-items: center; gap: 16px; }
-.ctag { background: rgba(255, 255, 255, 0.18); border: 1px solid rgba(255, 255, 255, 0.25); color: #fff; }
-.mode-switch :deep(.el-radio-button__inner) {
-  background: rgba(255, 255, 255, 0.12);
-  color: #e5e7eb;
-  border-color: rgba(255, 255, 255, 0.22);
-}
-.mode-switch :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
-  background: #fff; color: #2563eb; border-color: #fff; font-weight: 600;
-}
-
-.nav {
-  display: flex;
-  gap: 4px;
-  padding: 0 32px;
-  background: #fff;
-  border-bottom: 1px solid var(--line);
-}
-.nav-item {
-  padding: 14px 20px;
-  cursor: pointer;
-  font-size: 14px;
-  color: var(--ink-2);
-  border-bottom: 2px solid transparent;
-  transition: all 0.15s ease;
-  display: flex; align-items: center; gap: 6px;
-}
-.nav-item:hover { color: var(--el-color-primary); }
-.nav-item.active {
-  color: var(--el-color-primary);
-  font-weight: 600;
-  border-bottom-color: var(--el-color-primary);
-}
-.nav-icon { font-size: 15px; }
-
-/* 余额预警横幅 */
-.balance-banner {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 32px;
-  font-size: 13px;
-  border-bottom: 1px solid transparent;
-}
-.balance-banner.danger { background: #fef2f2; color: #b91c1c; border-bottom-color: #fecaca; }
-.balance-banner.warning { background: #fffbeb; color: #92400e; border-bottom-color: #fde68a; }
-.balance-banner.query-failed { background: #f8fafc; color: #475569; border-bottom-color: #e2e8f0; }
-.banner-icon { font-size: 15px; }
-.banner-text { flex: 1; line-height: 1.5; }
-.banner-action { color: inherit !important; text-decoration: underline; }
-
-.main { flex: 1; padding: 20px 32px; max-width: 1440px; width: 100%; margin: 0 auto; box-sizing: border-box; }
-.empty-panel { padding: 60px 20px; }
-.footer {
-  text-align: center;
-  font-size: 12px;
-  color: var(--ink-3);
-  padding: 18px;
-  border-top: 1px solid var(--line);
-  background: #fff;
-}
-.ver-tag { margin-left: 8px; font-size: 11px; color: var(--ink-3); opacity: 0.7; }
-</style>
